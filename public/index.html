@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASTRUM Cluster</title>
+<style>
+  :root {
+    --bg:#f5f6f8; --panel:#fff; --line:#e1e4ea; --text:#1b2030; --muted:#697086;
+    --accent:#2b6cff; --ok:#1f9d63; --warn:#c98a00; --bad:#d33b3b;
+    --c0:#eef1f6; --c1:#cfe0ff; --c2:#8db4ff; --c3:#4a85ff; --c4:#1d4fd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1219; --panel:#171b25; --line:#272d3b; --text:#e6e9f2; --muted:#8a92a8;
+      --accent:#6c9bff; --ok:#3ccf8e; --warn:#e8b339; --bad:#ff6b6b;
+      --c0:#1d2230; --c1:#22407a; --c2:#2f62c9; --c3:#4f8bff; --c4:#8fb5ff;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,Segoe UI,sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px 24px; align-items:center; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  h1 { font-size:17px; margin:0; font-weight:650; }
+  .muted { color:var(--muted); }
+  .pill { padding:2px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); } .pill.bad { color:var(--bad); }
+  main { padding:16px 20px 40px; display:grid; gap:16px; max-width:1500px; margin:auto; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; min-width:0; }
+  .panel h2 { margin:0 0 10px; font-size:13px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .tile .v { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .tile .s { font-size:12px; color:var(--muted); }
+  .bar { height:6px; background:var(--c0); border-radius:3px; margin-top:8px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .two { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:16px; }
+  @media (max-width:900px) { .two { grid-template-columns:1fr; } }
+  .cores { display:grid; grid-template-columns:repeat(8,1fr); gap:5px; }
+  .core { border-radius:5px; padding:5px 0; text-align:center; font-size:11px; font-variant-numeric:tabular-nums; background:var(--c0); position:relative; }
+  .core b { display:block; font-size:13px; }
+  .core.hot { color:#fff; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { font-size:12px; color:var(--muted); font-weight:600; cursor:pointer; user-select:none; }
+  td.cmd { white-space:normal; word-break:break-all; max-width:420px; color:var(--muted); font-size:12px; }
+  td.n, th.n { text-align:right; }
+  .scroll { overflow:auto; max-height:420px; }
+  .user { font-weight:600; }
+  .gpu-off { color:var(--bad); }
+  label { font-size:12px; color:var(--muted); margin-left:12px; }
+  svg.spark { width:100%; height:56px; display:block; }
+  .legend { font-size:12px; color:var(--muted); display:flex; gap:14px; margin-top:6px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ASTRUM Cluster</h1>
+  <span id="host" class="muted"></span>
+  <span id="fresh" class="pill">no data</span>
+  <span id="clusterFresh" class="muted"></span>
+</header>
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="panel">
+    <h2>Tasks in progress <span id="tasksNote" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="scroll"><table id="tasks"></table></div>
+  </section>
+
+  <section class="two">
+    <div class="panel">
+      <h2>CPU cores <span id="coreNote" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div class="cores" id="cores"></div>
+      <svg class="spark" id="spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
+      <div class="legend"><span><i class="dot" style="background:var(--accent)"></i>CPU avg %</span><span><i class="dot" style="background:var(--ok)"></i>GPU %</span></div>
+    </div>
+    <div class="panel">
+      <h2>GPU</h2>
+      <div id="gpu"></div>
+    </div>
+  </section>
+
+  <section class="two">
+    <div class="panel">
+      <h2>Cluster jobs (by user)</h2>
+      <div class="scroll"><table id="jobs"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Usage per user</h2>
+      <div class="scroll"><table id="users"></table></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Processes
+      <label><input type="checkbox" id="hideIdle" checked> hide idle (&lt;0.5% CPU)</label>
+      <label><input type="checkbox" id="hideKernel" checked> hide kernel threads</label>
+    </h2>
+    <div class="scroll"><table id="procs"></table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const fmtAge = (s) => s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s/60)}m` : s < 172800 ? `${(s/3600).toFixed(1)}h` : `${Math.round(s/86400)}d`;
+const fmtDur = (s) => { s = Math.round(s); const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d?`${d}d ${h}h`:h?`${h}h ${m}m`:m?`${m}m ${s%60}s`:`${s}s`; };
+let sortKey = "cpu", sortDir = -1;
+
+function tile(label, value, sub, pct) {
+  return `<div class="panel tile"><div class="s">${label}</div><div class="v">${value}</div><div class="s">${sub || ""}</div>` +
+    (pct != null ? `<div class="bar"><i style="width:${Math.min(100, pct)}%"></i></div>` : "") + `</div>`;
+}
+function heat(p) { return p < 5 ? "var(--c0)" : p < 25 ? "var(--c1)" : p < 50 ? "var(--c2)" : p < 80 ? "var(--c3)" : "var(--c4)"; }
+
+function render({ now, snap, history }) {
+  const h = snap.host, cl = snap.cluster, jobs = snap.jobs || [];
+  const running = jobs.filter((j) => j.status === "running");
+  const queued = jobs.filter((j) => j.status === "queued" || j.status === "pending");
+
+  // freshness
+  const age = h ? now - (snap.host_ts || h.ts) : null;
+  const f = $("fresh");
+  if (age == null) { f.textContent = "no host data"; f.className = "pill bad"; }
+  else { f.textContent = `host data ${fmtAge(age)} old`; f.className = "pill " + (age < 420 ? "ok" : age < 900 ? "warn" : "bad"); }
+  $("host").textContent = h ? h.hostname : "";
+  $("clusterFresh").textContent = snap.cluster_ts ? `scheduler data ${fmtAge(now - snap.cluster_ts)} old` : "";
+
+  // map pid -> owning job (walk ppid chain), so service-account processes get a real user
+  const jobByPid = new Map(jobs.filter((j) => j.pid).map((j) => [j.pid, j]));
+  const byPid = new Map(((h && h.procs) || []).map((p) => [p.pid, p]));
+  const ownerOf = (p) => {
+    for (let q = p, i = 0; q && i < 12; q = byPid.get(q.ppid), i++) {
+      const j = jobByPid.get(q.pid);
+      if (j) return j;
+    }
+    return null;
+  };
+
+  // tasks (from the feeder, every 5 min)
+  const tasks = snap.tasks || [];
+  $("tasksNote").textContent = snap.tasks_ts ? `· updated ${fmtAge(now - snap.tasks_ts)} ago, every 5 min` : "· no task data yet";
+  const pctCell = (p) => p == null ? '<span class="muted">n/a</span>' : `<b>${p.toFixed(p < 10 ? 1 : 0)}%</b><div class="bar" style="width:140px"><i style="width:${Math.min(100, p)}%"></i></div>`;
+  $("tasks").innerHTML = `<tr><th>task</th><th>kind</th><th>status</th><th>done</th><th>uses (CPU / GPU)</th><th>detail</th><th class="n">ETA</th></tr>` +
+    (tasks.map((k) => `<tr${k.level ? ' style="opacity:.85"' : ""}><td class="user" style="white-space:normal;padding-left:${8 + 16 * (k.level || 0)}px">${esc(k.name)}</td><td class="muted">${esc(k.kind || "")}</td><td>${esc(k.status || "")}</td><td>${pctCell(k.pct)}</td><td class="cmd" style="color:var(--text)">${esc(k.uses || "")}</td><td class="cmd">${esc(k.detail || "")}</td><td class="n">${k.eta_s != null ? fmtDur(k.eta_s) : ""}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">nothing running</td></tr>`);
+
+  // tiles
+  const t = [];
+  if (cl) {
+    t.push(tile("CPU slots", `${cl.used_cpu_slots}/${cl.cpu_slots}`, `${cl.available_cpu_slots} free · ${cl.cpu_reserve} reserved of ${cl.logical_cpus}`, 100 * cl.used_cpu_slots / cl.cpu_slots));
+    t.push(tile("GPU slots", `${cl.used_gpu_slots}/${cl.gpu_slots}`, `${cl.available_gpu_slots} free`, 100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots)));
+    t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb));
+    t.push(tile("Jobs", `${cl.running_jobs} running`, `${cl.queued_jobs} queued`));
+  }
+  if (h) {
+    const avg = h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length;
+    t.push(tile("Actual CPU load", `${avg.toFixed(0)}%`, `load avg ${h.load.join(" / ")}`, avg));
+    const used = h.mem_total_mb - h.mem_available_mb;
+    t.push(tile("RAM in use", `${(used/1024).toFixed(1)} GB`, `of ${(h.mem_total_mb/1024).toFixed(1)} GB`, 100 * used / h.mem_total_mb));
+  }
+  $("tiles").innerHTML = t.join("");
+
+  // cores
+  if (h) {
+    const n = h.cores.length;
+    $("cores").style.gridTemplateColumns = `repeat(${n > 16 ? 8 : 4}, 1fr)`;
+    $("cores").innerHTML = h.cores.map((c) => `<div class="core ${c.busy >= 50 ? "hot" : ""}" style="background:${heat(c.busy)}" title="core ${c.id}: user ${c.user}% · nice ${c.nice}% · sys ${c.sys}% · iowait ${c.iowait}%">${c.id}<b>${Math.round(c.busy)}%</b></div>`).join("");
+    const busy = h.cores.filter((c) => c.busy >= 50).length;
+    $("coreNote").textContent = `· ${busy} of ${n} cores busy`;
+  }
+
+  // sparkline
+  const W = 300, H = 56;
+  const line = (key, color) => {
+    const pts = history.map((p, i) => p[key] == null ? null : [i / Math.max(1, history.length - 1) * W, H - 2 - p[key] / 100 * (H - 4)]).filter(Boolean);
+    return pts.length > 1 ? `<polyline fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke" points="${pts.map((p) => p.join(",")).join(" ")}"/>` : "";
+  };
+  $("spark").innerHTML = line("cpu", "var(--accent)") + line("gpu", "var(--ok)");
+
+  // gpu
+  const g = h && h.gpu;
+  if (!g) $("gpu").innerHTML = `<span class="muted">no data</span>`;
+  else if (!g.ok) $("gpu").innerHTML = (g.model ? `<div><b>${esc(g.model)}</b></div>` : "") + `<div class="gpu-off" style="margin-top:4px"><b>Utilisation unavailable</b></div><div class="muted" style="margin-top:6px">${esc(g.error || "nvidia-smi failed")}</div>` +
+    `<div style="margin-top:10px"><b>Processes holding the GPU</b></div>` + ((g.apps || []).length ? `<table style="margin-top:4px"><tr><th>pid</th><th>process</th><th>job</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : "<b style='color:var(--bad)'>none</b>"}</td></tr>`; }).join("")}</table>` : `<div class="muted">none: the GPU is free</div>`) +
+    (cl ? `<div style="margin-top:10px">Scheduler: ${cl.used_gpu_slots}/${cl.gpu_slots} GPU slot in use</div>` : "");
+  else $("gpu").innerHTML = g.devices.map((d) => `<div><b>${esc(d.name)}</b> <span class="muted">· ${d.temp_c}°C${d.power_w != null ? ` · ${d.power_w} W` : ""}</span></div>
+      <div style="margin-top:8px">Compute ${d.util}%</div><div class="bar"><i style="width:${d.util}%"></i></div>
+      <div style="margin-top:8px">VRAM ${(d.mem_used_mb/1024).toFixed(1)} / ${(d.mem_total_mb/1024).toFixed(1)} GB</div><div class="bar"><i style="width:${100*d.mem_used_mb/d.mem_total_mb}%"></i></div>`).join("") +
+    (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th class="n">VRAM MB</th></tr>${g.apps.map((a) => `<tr><td>${a.pid}</td><td>${esc(a.name)}</td><td class="n">${a.mem_mb}</td></tr>`).join("")}</table>` : `<div class="muted" style="margin-top:8px">no compute processes</div>`);
+
+  // jobs
+  const shown = [...running, ...queued, ...jobs.filter((j) => !running.includes(j) && !queued.includes(j)).slice(0, 8)];
+  $("jobs").innerHTML = `<tr><th>user</th><th>status</th><th>project</th><th>engine</th><th class="n">CPU</th><th class="n">GPU</th><th class="n">elapsed</th></tr>` +
+    (shown.map((j) => {
+      const el = j.status === "running" ? now - j.started_ts : j.finished_ts && j.started_ts ? j.finished_ts - j.started_ts : 0;
+      return `<tr><td class="user">${esc(j.client_id)}</td><td>${esc(j.status)}</td><td>${esc(j.project)}</td><td>${esc(j.engine)}</td><td class="n">${j.cpu_slots}</td><td class="n">${j.gpu_slots}</td><td class="n">${fmtDur(el)}</td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="muted">no jobs</td></tr>`);
+
+  // per-user
+  const users = {};
+  for (const j of running) { const u = users[j.client_id] ||= { jobs: 0, cpu: 0, gpu: 0, q: 0 }; u.jobs++; u.cpu += j.cpu_slots; u.gpu += j.gpu_slots; }
+  for (const j of queued) { (users[j.client_id] ||= { jobs: 0, cpu: 0, gpu: 0, q: 0 }).q++; }
+  const procCpu = {};
+  for (const p of (h && h.procs) || []) { const o = ownerOf(p); const u = o ? o.client_id : p.user; procCpu[u] = (procCpu[u] || 0) + p.cpu; }
+  const names = [...new Set([...Object.keys(users), ...Object.keys(procCpu).filter((u) => procCpu[u] >= 5)])];
+  $("users").innerHTML = `<tr><th>user</th><th class="n">jobs</th><th class="n">queued</th><th class="n">CPU slots</th><th class="n">GPU</th><th class="n">live CPU (cores)</th></tr>` +
+    (names.map((u) => { const r = users[u] || { jobs: 0, cpu: 0, gpu: 0, q: 0 }; return `<tr><td class="user">${esc(u)}</td><td class="n">${r.jobs}</td><td class="n">${r.q}</td><td class="n">${r.cpu}</td><td class="n">${r.gpu}</td><td class="n">${((procCpu[u] || 0) / 100).toFixed(2)}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">idle</td></tr>`);
+
+  // processes
+  const hideIdle = $("hideIdle").checked, hideKernel = $("hideKernel").checked;
+  let rows = ((h && h.procs) || []).map((p) => ({ ...p, owner: ownerOf(p) }));
+  rows = rows.filter((p) => !(hideIdle && p.cpu < 0.5) && !(hideKernel && /^(\[|kworker|kthreadd|irq\/|rcu_|ksoftirq|migration|cpuhp|jbd2|kswapd|kcompactd)/.test(p.cmd)));
+  const val = (p) => sortKey === "who" ? (p.owner ? p.owner.client_id : p.user) : p[sortKey];
+  rows.sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);
+  const th = (k, l, cls = "") => `<th class="${cls}" data-k="${k}">${l}${sortKey === k ? (sortDir < 0 ? " ▾" : " ▴") : ""}</th>`;
+  $("procs").innerHTML = `<tr>${th("who", "who")}${th("user", "OS user")}${th("pid", "pid", "n")}${th("cpu", "CPU %", "n")}${th("mem", "MEM %", "n")}${th("etimes", "running", "n")}<th>command</th></tr>` +
+    (rows.slice(0, 80).map((p) => `<tr><td class="user">${esc(p.owner ? p.owner.client_id : p.user)}</td><td class="muted">${esc(p.user)}</td><td class="n">${p.pid}</td><td class="n">${p.cpu.toFixed(1)}</td><td class="n">${p.mem.toFixed(1)}</td><td class="n">${fmtDur(p.etimes)}</td><td class="cmd">${esc(p.cmd)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">nothing to show</td></tr>`);
+}
+
+let last = null;
+async function tick() {
+  try { last = await (await fetch("/api/snapshot", { cache: "no-store" })).json(); render(last); }
+  catch { $("fresh").textContent = "dashboard server unreachable"; $("fresh").className = "pill bad"; }
+}
+document.addEventListener("click", (e) => {
+  const k = e.target.closest("th[data-k]")?.dataset.k;
+  if (!k) return;
+  sortDir = sortKey === k ? -sortDir : (k === "cpu" || k === "mem" || k === "etimes" ? -1 : 1); sortKey = k;
+  if (last) render(last);
+});
+["hideIdle", "hideKernel"].forEach((id) => $(id).addEventListener("change", () => last && render(last)));
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>

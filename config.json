@@ -1,0 +1,15 @@
+{
+ "dashboard_port": 8787,
+ "refresh_minutes": 5,
+ "astra_root": "C:\\Dev\\ASTRA",
+ "status_service": {
+  "host": "100.66.143.117",
+  "port": 8818,
+  "project": "astrum-status",
+  "hours": 24,
+  "progress_dirs": ["~/avatar_build/v3/progress"]
+ },
+ "projects": [
+  { "milestones": "C:\\Users\\Ivaylo\\Desktop\\Avatar\\avatar-demo-v3\\tools\\status\\v3-milestones.json" }
+ ]
+}

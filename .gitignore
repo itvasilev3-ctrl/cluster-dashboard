@@ -1,0 +1,7 @@
+# secrets and runtime data
+.env
+data/
+state/
+node_modules/
+*.log
+*.orig
