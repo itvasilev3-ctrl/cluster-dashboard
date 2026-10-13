@@ -232,7 +232,7 @@ async function cycle() {
   let cluster = null, jobs = [];
   try {
     cluster = astra({ action: "cluster_capacity" });
-    jobs = astra({ action: "cluster_job", job_id: "", client_filter: "", limit: 50 }).jobs || [];
+    jobs = astra({ action: "cluster_job", job_id: "", client_filter: "", limit: 200 }).jobs || [];   // 200 = the maximum; long jobs fall out of shorter windows
   } catch (e) { log("scheduler:", e.message); }
   const st = await statusService(jobs);
   const tasks = buildTasks(jobs, st.progress || [], st.host, now);

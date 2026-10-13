@@ -81,7 +81,7 @@ Emma v3 jobs use `tools/cluster-v3/progress.py` in the emma-avatar-v3 repo.
 ## Known limits
 
 - **NVML.** On ASTRUM it fails ("driver/library version mismatch") until the machine is rebooted after its driver update. Until then, GPU utilisation and per-process VRAM cannot be read; the dashboard says so instead of guessing.
-- **Job list window.** The scheduler returns the latest 50 jobs of all clients.
+- **Job list window.** The scheduler returns at most the latest 200 jobs of all clients; a running job older than that is missed.
 - **Two kinds of %.** "Time used" is not real progress for jobs that write no progress file.
 
 `collector/probe.py` and the page are from the first version of this dashboard (2026-10-11), which had no feeder.
