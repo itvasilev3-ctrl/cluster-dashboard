@@ -151,7 +151,7 @@ function projectTasks(file, byTask, used) {
     if (kind === "workflow") return workflowProgress(arg, wfExpected.get(arg) || 1);
     if (kind === "progress") {
       used.add(arg); const p = byTask.get(arg);
-      return p ? { frac: progressFrac(p) ?? 0, status: p.done >= p.total ? "done" : "running", detail: `${p.done}/${p.total} ${p.unit || ""} ${p.note || ""}`.trim(), eta: progressEta(p), job_id: p.job_id }
+      return p ? { frac: progressFrac(p) ?? 0, status: p.failed ? "failed" : p.done >= p.total ? "done" : "running", detail: `${p.done}/${p.total} ${p.unit || ""} ${p.note || ""}`.trim(), eta: progressEta(p), job_id: p.job_id }
         : { frac: 0, status: "not started", detail: "" };
     }
     if (kind === "manual") return { frac: Number(arg) || 0, status: Number(arg) >= 1 ? "done" : "running", detail: "" };
@@ -200,7 +200,7 @@ function buildTasks(jobs, progress, host, now) {
   for (const p of progress) {                                     // other recent progress files
     if (used.has(p.task) || now - (p.ts || 0) > 6 * 3600 || (p.done >= p.total && now - p.ts > 1800)) continue;
     const jr = p.job_id && jobRes.get(p.job_id);
-    tasks.push({ name: p.label || p.task, kind: "project job", status: p.done >= p.total ? "done" : "running", pct: 100 * (progressFrac(p) ?? 0),
+    tasks.push({ name: p.label || p.task, kind: "project job", status: p.failed ? "failed" : p.done >= p.total ? "done" : "running", pct: 100 * (progressFrac(p) ?? 0),
       detail: `${p.done}/${p.total} ${p.unit || ""} ${p.note || ""}`.trim(), eta_s: progressEta(p), uses: jr ? usesText(jr.j, jr.r) : null });
   }
   // every queued or running job on the cluster, any client
