@@ -58,6 +58,8 @@
   <span id="host" class="muted"></span>
   <span id="fresh" class="pill">no data</span>
   <span id="clusterFresh" class="muted"></span>
+  <button id="refreshNow" class="pill" type="button" title="Collect fresh data from the cluster now">Refresh now</button>
+  <span id="feedInfo" class="muted"></span>
 </header>
 <main>
   <section class="tiles" id="tiles"></section>
@@ -113,7 +115,18 @@ function tile(label, value, sub, pct) {
 }
 function heat(p) { return p < 5 ? "var(--c0)" : p < 25 ? "var(--c1)" : p < 50 ? "var(--c2)" : p < 80 ? "var(--c3)" : "var(--c4)"; }
 
-function render({ now, snap, history }) {
+function renderFeed(now, feed) {
+  const el = $("feedInfo");
+  if (!feed) { el.textContent = ""; return; }
+  const parts = [];
+  if (feed.running) parts.push("refreshing now…");
+  else if (feed.last_end) parts.push(`last refresh ${fmtAge(now - feed.last_end)} ago${feed.last_code ? " (failed, code " + feed.last_code + ")" : ""}`);
+  if (feed.next_due) parts.push(`next in ${fmtAge(Math.max(0, feed.next_due - now))}`);
+  el.textContent = parts.join(" · ");
+}
+
+function render({ now, snap, history, feed }) {
+  renderFeed(now, feed);
   const h = snap.host, cl = snap.cluster, jobs = snap.jobs || [];
   const running = jobs.filter((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "queued" || j.status === "pending");
@@ -227,6 +240,11 @@ document.addEventListener("click", (e) => {
   if (!k) return;
   sortDir = sortKey === k ? -sortDir : (k === "cpu" || k === "mem" || k === "etimes" ? -1 : 1); sortKey = k;
   if (last) render(last);
+});
+$("refreshNow").addEventListener("click", async () => {
+  const b = $("refreshNow"); b.disabled = true; b.textContent = "Refreshing…";
+  try { await fetch("/api/refresh", { method: "POST" }); } catch { /* the tick shows the error */ }
+  setTimeout(() => { b.disabled = false; b.textContent = "Refresh now"; }, 8000);
 });
 ["hideIdle", "hideKernel"].forEach((id) => $(id).addEventListener("change", () => last && render(last)));
 tick(); setInterval(tick, 2000);

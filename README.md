@@ -85,3 +85,14 @@ Emma v3 jobs use `tools/cluster-v3/progress.py` in the emma-avatar-v3 repo.
 - **Two kinds of %.** "Time used" is not real progress for jobs that write no progress file.
 
 `collector/probe.py` and the page are from the first version of this dashboard (2026-10-11), which had no feeder.
+
+
+## Refresh loop (2026-10-16)
+
+- `server.js` runs `feeder.mjs` itself every 5 minutes (`FEED_MIN`) and once at start, so the dashboard refreshes whenever
+  the server process is alive, including after sleep. The page shows "last refresh … ago · next in …" and has a
+  **Refresh now** button (`POST /api/refresh`, loopback only).
+- Why: the Windows scheduled task skipped every run on battery ("No Start On Batteries") and failed after sleep / re-logon
+  (0x80070520), which left the data hours old while the laptop travelled.
+- The scheduled task (`install-task.ps1`, re-run to update) is now a watchdog that restarts the server. It runs on
+  battery, catches up after sleep, and never runs twice at once.
