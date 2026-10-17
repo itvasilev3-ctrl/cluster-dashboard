@@ -104,7 +104,13 @@ function workflowProgress(run, expected) {
     if (!l) continue;
     try { const o = JSON.parse(l); if (o.type === "started") started++; else if (o.type === "result") done++; } catch { /* partial line */ }
   }
-  const idle = (Date.now() - fs.statSync(f).mtimeMs) / 1000;
+  // Idle = time since anything in the run folder changed. The journal only changes when an agent starts or ends, so one
+  // long agent (e.g. 6 h waiting for GPU jobs) left it untouched and showed "stalled?" while the agent was busy; the
+  // agents' own transcripts (agent-*.jsonl) are written on every step.
+  const dir = path.dirname(f);
+  let last = fs.statSync(f).mtimeMs;
+  for (const n of fs.readdirSync(dir)) if (/^agent-.*\.jsonl$/.test(n)) { try { last = Math.max(last, fs.statSync(path.join(dir, n)).mtimeMs); } catch { /* gone */ } }
+  const idle = (Date.now() - last) / 1000;
   return { frac: Math.min(1, done / Math.max(1, expected)), status: done >= expected ? "done" : idle > 3 * 3600 ? "stalled?" : "running",
     detail: `${done} of ${expected} agents finished, ${Math.max(0, started - done)} running`, idle };
 }
