@@ -99,20 +99,24 @@ function findJournal(run) {
 function workflowProgress(run, expected) {
   const f = findJournal(run);
   if (!f) return { frac: 0, status: "not found", detail: "journal not found" };
-  let started = 0, done = 0;
+  // each agent's latest event (a resumed run starts failed agents again under the same key)
+  const last = new Map();
   for (const l of fs.readFileSync(f, "utf8").split("\n")) {
     if (!l) continue;
-    try { const o = JSON.parse(l); if (o.type === "started") started++; else if (o.type === "result") done++; } catch { /* partial line */ }
+    try { const o = JSON.parse(l); if (o.key && ["started", "result", "failed"].includes(o.type)) last.set(o.key, o.type); } catch { /* partial line */ }
   }
+  const count = (t) => [...last.values()].filter((v) => v === t).length;
+  const done = count("result"), failed = count("failed"), running = count("started");
   // Idle = time since anything in the run folder changed. The journal only changes when an agent starts or ends, so one
   // long agent (e.g. 6 h waiting for GPU jobs) left it untouched and showed "stalled?" while the agent was busy; the
   // agents' own transcripts (agent-*.jsonl) are written on every step.
   const dir = path.dirname(f);
-  let last = fs.statSync(f).mtimeMs;
-  for (const n of fs.readdirSync(dir)) if (/^agent-.*\.jsonl$/.test(n)) { try { last = Math.max(last, fs.statSync(path.join(dir, n)).mtimeMs); } catch { /* gone */ } }
-  const idle = (Date.now() - last) / 1000;
-  return { frac: Math.min(1, done / Math.max(1, expected)), status: done >= expected ? "done" : idle > 3 * 3600 ? "stalled?" : "running",
-    detail: `${done} of ${expected} agents finished, ${Math.max(0, started - done)} running`, idle };
+  let lastMs = fs.statSync(f).mtimeMs;
+  for (const n of fs.readdirSync(dir)) if (/^agent-.*\.jsonl$/.test(n)) { try { lastMs = Math.max(lastMs, fs.statSync(path.join(dir, n)).mtimeMs); } catch { /* gone */ } }
+  const idle = (Date.now() - lastMs) / 1000;
+  const status = done >= expected ? "done" : running ? (idle > 3 * 3600 ? "stalled?" : "running") : failed ? "failed" : idle > 3 * 3600 ? "stalled?" : "running";
+  return { frac: Math.min(1, done / Math.max(1, expected)), status,
+    detail: `${done} of ${expected} agents finished, ${running} running${failed ? `, ${failed} failed (resume the run)` : ""}`, idle };
 }
 
 const progressFrac = (p) => (p && p.total ? Math.min(1, p.done / p.total) : null);
