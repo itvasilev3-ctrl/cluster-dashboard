@@ -59,15 +59,26 @@ async function ensureDashboard() {
   await new Promise((r) => setTimeout(r, 1500));
 }
 
+// /probe takes 1.5 to 13 s depending on how loaded the machine is (the service runs niced), so wait for it and retry once
+async function getRetry(url, headers, timeoutMs = 45_000) {
+  try { return await get(url, timeoutMs, headers); } catch { return get(url, timeoutMs, headers); }
+}
+
 // the status service: read it, or (re)submit its job when no such job is queued or running
 async function statusService(jobs) {
   if (!TOKEN) return { host: null, progress: [], note: "no STATUS_TOKEN in .env" };
   const H = { Authorization: `Bearer ${TOKEN}` };
   try {
-    const [host, progress] = await Promise.all([get(`${STATUS}/probe`, 12000, H), get(`${STATUS}/progress`, 12000, H)]);
+    const [host, progress] = await Promise.all([getRetry(`${STATUS}/probe`, H), getRetry(`${STATUS}/progress`, H)]);
     return { host, progress };
   } catch (e) {
-    const mine = jobs.filter((j) => j.project === SS.project && ["queued", "running"].includes(j.status));
+    // The shared latest-200 list is dominated by other clients' short jobs, so the 24 h service job drops out of it and
+    // was mistaken for "not running" (a duplicate submit that always died with "address already in use"). Look among our own jobs.
+    let own = jobs;
+    if (CFG.client_id) {
+      try { own = astra({ action: "cluster_job", job_id: "", client_filter: CFG.client_id, limit: 200 }).jobs || jobs; } catch (e2) { log("scheduler (own jobs):", e2.message); }
+    }
+    const mine = own.filter((j) => j.project === SS.project && ["queued", "running"].includes(j.status));
     if (!mine.length) {
       const pre = `import os\nos.environ.setdefault("HOST", ${JSON.stringify(SS.host)})\nos.environ.setdefault("PORT", "${SS.port}")\n` +
         `os.environ.setdefault("HOURS", "${SS.hours || 24}")\nos.environ.setdefault("PROGRESS_DIRS", ${JSON.stringify((SS.progress_dirs || []).join(":"))})\n`;

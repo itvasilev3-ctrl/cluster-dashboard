@@ -1,8 +1,9 @@
 """
 Status service on the GPU machine for the ASTRUM dashboard (http://127.0.0.1:8787 on the PC, fed by tools/status/feeder.mjs).
-Runs as one long CPU-only ASTRA job instead of a probe job every 5 minutes. Standard library only; never touches the GPU.
+Runs as one long CPU-only ASTRA job instead of a probe job every 5 minutes. Standard library only; it never starts GPU work
+(it only queries the driver with nvidia-smi, and falls back to listing the device-file holders when NVML is broken).
 
-  GET  /probe     host snapshot in the dashboard's format: per-core load, RAM, processes, GPU users
+  GET  /probe     host snapshot in the dashboard's format: per-core load, RAM, processes, GPU utilisation / VRAM / users
   GET  /progress  every *.json in $PROGRESS_DIRS (default ~/avatar_build/v3/progress), written by project jobs
   POST /shutdown
 Token: ~/.emma/gpu_token as "Authorization: Bearer"; binds only to the Tailscale address ($HOST), port $PORT (8818).
@@ -16,6 +17,7 @@ HOURS = float(os.environ.get("HOURS", "24"))
 PROGRESS_DIRS = [os.path.expanduser(d) for d in os.environ.get("PROGRESS_DIRS", "~/avatar_build/v3/progress").split(":") if d]
 HZ = os.sysconf("SC_CLK_TCK")
 DRV = "/proc/driver/" + "nv" + "idia"                         # split: the scheduler gives a GPU to jobs naming the driver
+SMI = "nv" + "idia-smi"                                       # same reason; it only queries the driver, it never starts GPU work
 
 
 def read_stat():
@@ -28,7 +30,7 @@ def read_stat():
 
 
 def gpu_users():
-    """Processes holding the GPU device files (memory per process needs NVML, which is broken on this box)."""
+    """Processes holding the GPU device files (works even when NVML does not)."""
     out = []
     for d in glob.glob("/proc/[0-9]*"):
         try:
@@ -39,6 +41,69 @@ def gpu_users():
         except OSError:
             pass
     return out
+
+
+def num(s):
+    try:
+        return float(s)
+    except ValueError:
+        return None                                                         # "[N/A]", "[Not Supported]"
+
+
+def smi_query(what, fields):
+    """Rows of `nvidia-smi --query-<what>=<fields>` as lists of strings; RuntimeError carries the first line of its complaint."""
+    r = subprocess.run([SMI, f"--query-{what}={fields}", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=8)
+    if r.returncode:
+        raise RuntimeError(((r.stdout + r.stderr).strip().splitlines() or [f"exit {r.returncode}"])[0])
+    return [[c.strip() for c in line.split(",")] for line in r.stdout.strip().splitlines() if line.strip()]
+
+
+def gpu_info(model, drv):
+    """GPU block of the snapshot: utilisation, VRAM, temperature and power when NVML works; otherwise only the device-file holders."""
+    apps = gpu_users()                                                      # first: the query below holds the device files itself
+    try:
+        devices = [{"index": int(r[0]), "name": r[1], "util": num(r[2]) or 0.0, "mem_util": num(r[3]) or 0.0, "mem_used_mb": num(r[4]) or 0.0,
+                    "mem_total_mb": num(r[5]) or 0.0, "temp_c": num(r[6]) or 0.0, "power_w": num(r[7]), "power_limit_w": num(r[8])}
+                   for r in smi_query("gpu", "index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,power.limit")]
+        if not devices:
+            raise RuntimeError("no GPU listed")
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, IndexError) as e:
+        return {"ok": False, "devices": [], "apps": apps, "model": model,
+                "error": f"{model}: utilisation and VRAM are unavailable ({e}). {drv}"}
+    try:                                                                    # VRAM per process, by pid
+        mem = {int(r[0]): num(r[2]) for r in smi_query("compute-apps", "pid,process_name,used_memory") if r[0].isdigit()}
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, IndexError):
+        mem = {}
+    for a in apps:
+        if mem.get(a["pid"]) is not None:
+            a["mem_mb"] = mem[a["pid"]]
+    held = {a["pid"] for a in apps}
+    for pid, mb in mem.items():                                             # compute processes without an open device file we could read
+        if pid not in held:
+            apps.append({"pid": pid, "name": f"pid {pid}", "mem_mb": mb})
+    return {"ok": True, "devices": devices, "apps": apps, "model": model or devices[0]["name"], "error": None}
+
+
+def cpu_temps():
+    """CPU temperature from the kernel's hwmon sensors: AMD k10temp (Tctl = package, Tccd* = one per chiplet) or Intel coretemp."""
+    for h in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        try:
+            name = open(h + "/name").read().strip()
+            if name not in ("k10temp", "coretemp"):
+                continue
+            sensors = []
+            for f in sorted(glob.glob(h + "/temp*_input")):
+                try:
+                    label = open(f.replace("_input", "_label")).read().strip()
+                except OSError:
+                    label = os.path.basename(f)
+                sensors.append({"label": label, "temp_c": round(int(open(f).read()) / 1000, 1)})
+            pkg = next((s for s in sensors if s["label"] in ("Tctl", "Package id 0")), sensors[0] if sensors else None)
+            if pkg:
+                return {"temp_c": pkg["temp_c"], "label": pkg["label"], "sensors": sensors, "driver": name}
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def thread_times():
@@ -89,12 +154,10 @@ def probe():
         for line in open(f):
             if line.startswith("Model:"):
                 model = line.split(":", 1)[1].strip()
-    gpu = {"ok": False, "devices": [], "apps": gpu_users(), "model": model,
-           "error": f"{model}: utilisation and VRAM need NVML, which fails on this machine (driver/library version mismatch: "
-                    "the driver was updated without a reboot). " + drv}
+    gpu = gpu_info(model, drv)
     return {"ts": time.time(), "hostname": os.uname().nodename, "load": [float(x) for x in open("/proc/loadavg").read().split()[:3]],
             "mem_total_mb": mem.get("MemTotal", 0), "mem_available_mb": mem.get("MemAvailable", 0), "cores": cores, "procs": procs,
-            "threads": threads, "gpu": gpu}
+            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps()}
 
 
 def progress():
@@ -140,7 +203,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 srv = ThreadingHTTPServer((HOST, PORT), Handler)
-threading.Timer(HOURS * 3600, srv.shutdown).start()
+limit = threading.Timer(HOURS * 3600, srv.shutdown)
+limit.daemon = True                                          # a non-daemon timer kept the job alive for the full 24 h after /shutdown
+limit.start()
 print(f"status service on {HOST}:{PORT} for {HOURS} h", flush=True)
 srv.serve_forever()
+srv.server_close()                                           # free the port so the next service can bind it
 print("VERDICT: PASS")

@@ -169,6 +169,8 @@ function render({ now, snap, history, feed }) {
     const avg = h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length;
     t.push(tile("Actual CPU load", `${avg.toFixed(0)}%`, `load avg ${h.load.join(" / ")}`, avg));
     const used = h.mem_total_mb - h.mem_available_mb;
+    const ct = h.cpu_temp;                                    // from the status service; absent while an older service is running
+    if (ct) t.push(tile("CPU temperature", `${ct.temp_c.toFixed(0)} °C`, ct.sensors.filter((s) => s !== ct && s.label !== ct.label).map((s) => `${s.label} ${s.temp_c.toFixed(0)}°`).join(" · ") || ct.label, ct.temp_c));
     t.push(tile("RAM in use", `${(used/1024).toFixed(1)} GB`, `of ${(h.mem_total_mb/1024).toFixed(1)} GB`, 100 * used / h.mem_total_mb));
   }
   $("tiles").innerHTML = t.join("");
@@ -199,7 +201,7 @@ function render({ now, snap, history, feed }) {
   else $("gpu").innerHTML = g.devices.map((d) => `<div><b>${esc(d.name)}</b> <span class="muted">· ${d.temp_c}°C${d.power_w != null ? ` · ${d.power_w} W` : ""}</span></div>
       <div style="margin-top:8px">Compute ${d.util}%</div><div class="bar"><i style="width:${d.util}%"></i></div>
       <div style="margin-top:8px">VRAM ${(d.mem_used_mb/1024).toFixed(1)} / ${(d.mem_total_mb/1024).toFixed(1)} GB</div><div class="bar"><i style="width:${100*d.mem_used_mb/d.mem_total_mb}%"></i></div>`).join("") +
-    (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th class="n">VRAM MB</th></tr>${g.apps.map((a) => `<tr><td>${a.pid}</td><td>${esc(a.name)}</td><td class="n">${a.mem_mb}</td></tr>`).join("")}</table>` : `<div class="muted" style="margin-top:8px">no compute processes</div>`);
+    (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th>job</th><th class="n">VRAM MB</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : "<b style='color:var(--bad)'>none</b>"}</td><td class="n">${a.mem_mb}</td></tr>`; }).join("")}</table>` : `<div class="muted" style="margin-top:8px">no processes are using the GPU</div>`);
 
   // jobs
   const shown = [...running, ...queued, ...jobs.filter((j) => !running.includes(j) && !queued.includes(j)).slice(0, 8)];
