@@ -160,7 +160,7 @@ function projectTasks(file, byTask, used) {
       return p ? { frac: progressFrac(p) ?? 0, status: p.failed ? "failed" : p.done >= p.total ? "done" : "running", detail: `${p.done}/${p.total} ${p.unit || ""} ${p.note || ""}`.trim(), eta: progressEta(p), job_id: p.job_id }
         : { frac: 0, status: "not started", detail: "" };
     }
-    if (kind === "manual") return { frac: Number(arg) || 0, status: Number(arg) >= 1 ? "done" : "running", detail: "" };
+    if (kind === "manual") { const f = Number(arg) || 0; return { frac: f, status: f >= 1 ? "done" : f > 0 ? "running" : "to do", detail: "" }; }
     return { frac: 0, status: "?", detail: src };
   };
   const rows = [];
@@ -174,9 +174,15 @@ function projectTasks(file, byTask, used) {
     }
     doneH += m.gpu_h * frac;
     if (m.status === "active") {
-      rows.push({ name: `${m.id} ${m.name}`, kind: "milestone", status: "in progress", pct: 100 * frac, level: 1, detail: `${m.gpu_h} GPU-h in the plan` });
-      for (const { p, r } of parts) rows.push({ name: p.name, kind: p.source.split(":")[0], status: r.status, pct: 100 * r.frac, level: 2,
+      // finished parts are left out (the user wants only what is next); the milestone row counts them
+      const open = parts.filter(({ r }) => r.status !== "done"), closed = parts.length - open.length;
+      rows.push({ name: `${m.id} ${m.name}`, kind: "milestone", status: "in progress", pct: 100 * frac, level: 1,
+        detail: `${m.gpu_h} GPU-h in the plan${closed ? `; ${closed} of ${parts.length} parts done` : ""}` });
+      for (const { p, r } of open) rows.push({ name: p.name, kind: p.source.split(":")[0], status: r.status, pct: 100 * r.frac, level: 2,
         detail: r.detail, eta_s: r.eta ?? null, job_id: r.job_id, uses: p.source.startsWith("workflow:") ? "Claude agents (cloud): no cluster CPU/GPU" : null });
+    } else if (m.status === "planned") {
+      rows.push({ name: `${m.id} ${m.name}`, kind: "milestone", status: "next", pct: 0, level: 1,
+        detail: `${m.gpu_h} GPU-h in the plan${m.parts ? ": " + m.parts.map((p) => p.name.split(/[:(]/)[0].trim()).join("; ") : ""}` });
     }
   }
   const pct = (100 * doneH) / M.total_gpu_h, retryH = M.total_with_retries_gpu_h || M.total_gpu_h;
