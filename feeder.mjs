@@ -216,6 +216,24 @@ function projectTasks(file, byTask, used) {
   return tasks;
 }
 
+// The scheduler lists only the latest 200 jobs, of all clients and also of one client, so a long job drops out of every list once
+// others submit enough short ones (a 12 h job of nelson's was invisible). The host's process list still names each running job
+// ("astra_cluster_manager.py run <job_id>"): look up the ones the list is missing, by id.
+function withUnlistedRunning(jobs, host) {
+  if (!host) return jobs;
+  const have = new Set(jobs.map((j) => j.job_id));
+  const ids = [...new Set((host.procs || []).map((p) => /astra_cluster_manager\.py run (astrum_\S+)/.exec(p.cmd)?.[1]).filter(Boolean))]
+    .filter((id) => !have.has(id)).slice(0, 12);
+  const out = [...jobs];
+  for (const id of ids) {
+    try {
+      const j = astra({ action: "cluster_job", job_id: id });
+      if (j && j.job_id === id) { out.push(j); log("job outside the scheduler's latest-200 list, looked up by id:", id, j.client_id, j.project, j.status); }
+    } catch (e) { log("lookup of", id, "failed:", e.message); }
+  }
+  return out;
+}
+
 function buildTasks(jobs, progress, host, now) {
   const byTask = new Map(progress.map((p) => [p.task, p]));
   const used = new Set();
@@ -262,6 +280,7 @@ async function cycle() {
     jobs = astra({ action: "cluster_job", job_id: "", client_filter: "", limit: 200 }).jobs || [];   // 200 = the maximum; long jobs fall out of shorter windows
   } catch (e) { log("scheduler:", e.message); }
   const st = await statusService(jobs);
+  jobs = withUnlistedRunning(jobs, st.host);
   const tasks = buildTasks(jobs, st.progress || [], st.host, now);
   const body = { tasks };
   if (cluster) { body.cluster = cluster; body.jobs = jobs; }

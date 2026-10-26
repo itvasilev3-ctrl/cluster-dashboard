@@ -169,7 +169,8 @@ function render({ now, snap, history, feed }) {
       (cl.used_gpu_slots ? `held by ${esc(holders.join(", ") || "a job")}` : "free") + (gpuWaiting.length ? ` · ${gpuWaiting.length} waiting` : ""),
       100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots)));
     t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb));
-    t.push(tile("Jobs", `${cl.running_jobs} running`, `${cl.queued_jobs} queued`));
+    const unlisted = cl.running_jobs - running.length;        // the scheduler counts more running jobs than it lists (it lists only the latest 200)
+    t.push(tile("Jobs", `${cl.running_jobs} running`, `${cl.queued_jobs} queued` + (unlisted > 0 ? ` · <b style="color:var(--bad)">${unlisted} running not in the list</b>` : "")));
   }
   if (h) {
     const avg = h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length;
