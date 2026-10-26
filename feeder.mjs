@@ -246,7 +246,7 @@ function buildTasks(jobs, progress, host, now) {
   }
   // GPU held by a process outside every scheduler job (e.g. an orphaned worker)
   for (const a of (host && host.gpu && host.gpu.apps) || []) {
-    if (claimed.has(a.pid)) continue;
+    if (claimed.has(a.pid) || a.type === "G") continue;           // type G = graphics (the login screen's gnome-shell), not compute work
     tasks.push({ name: "GPU held outside the scheduler", kind: "warning", status: "running", pct: null, detail: `pid ${a.pid}: ${a.name}`,
       uses: `GPU: ${(host.gpu && host.gpu.model) || "GPU"} (no scheduler job owns this process)` });
   }

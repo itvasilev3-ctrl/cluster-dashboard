@@ -208,14 +208,29 @@ function render({ now, snap, history, feed }) {
       ? `<table style="margin-top:4px"><tr><th>held by</th><th class="n">running</th><th>GPU</th></tr>${gpuHolders.map((j) => `<tr><td class="user">${esc(j.client_id)} · ${esc(j.project)}</td><td class="n">${fmtDur(now - j.started_ts)}</td><td>${usingGpu(j) ? "<b>in use</b>" : "<span class='muted'>idle: slot held, device not opened</span>"}</td></tr>`).join("")}</table>`
       : cl.used_gpu_slots ? `<div class="muted">held by ${esc(heldBy.join(", ") || "a job")} (the job is not in the latest 200 the scheduler lists)</div>` : `<div class="muted">free</div>`) +
     (gpuWaiting.length ? `<div style="margin-top:6px">${gpuWaiting.length} waiting: ${esc([...new Set(gpuWaiting.map((j) => `${j.client_id} · ${j.project}`))].join(", "))} <span class="muted">(oldest ${fmtDur(now - Math.min(...gpuWaiting.map((j) => j.created_ts)))})</span></div>` : "");
+  const meter = (label, text, pct) => `<div style="margin-top:8px">${label} <b>${text}</b></div><div class="bar"><i style="width:${Math.min(100, Math.max(0, pct || 0))}%"></i></div>`;
+  const gpuDeviceHtml = (d) => {
+    const head = [d.temp_c != null ? `${d.temp_c}°C` : "", d.fan_pct != null ? `fan ${d.fan_pct}%` : "", d.pstate || ""].filter(Boolean).join(" · ");
+    const mhz = (cur, max) => cur == null ? "–" : `${cur.toFixed(0)}${max ? ` / ${max.toFixed(0)}` : ""} MHz`;
+    const info = [
+      d.clock_gr_mhz != null ? `graphics ${mhz(d.clock_gr_mhz, d.clock_gr_max_mhz)}` : "",
+      d.clock_mem_mhz != null ? `memory ${mhz(d.clock_mem_mhz, d.clock_mem_max_mhz)}` : "",
+      d.pcie_gen != null ? `PCIe gen ${d.pcie_gen} x${d.pcie_width}${d.pcie_gen_max ? ` (max gen ${d.pcie_gen_max} x${d.pcie_width_max})` : ""}` : "",
+      d.enc_util != null ? `encoder ${d.enc_util}% · decoder ${d.dec_util}%` : "",
+      d.throttle && d.throttle.length ? `clocks limited by: ${d.throttle.join(", ")}` : "",
+    ].filter(Boolean);
+    return `<div><b>${esc(d.name)}</b> <span class="muted">· ${esc(head)}</span></div>` +
+      meter("Compute", `${d.util}%`, d.util) + meter("Memory bandwidth", `${d.mem_util}%`, d.mem_util) +
+      meter("VRAM", `${(d.mem_used_mb / 1024).toFixed(1)} / ${(d.mem_total_mb / 1024).toFixed(1)} GB`, 100 * d.mem_used_mb / d.mem_total_mb) +
+      (d.power_w != null ? meter("Power", `${d.power_w.toFixed(0)} W${d.power_limit_w ? ` of ${d.power_limit_w.toFixed(0)} W limit` : ""}`, d.power_limit_w ? 100 * d.power_w / d.power_limit_w : 0) : "") +
+      (info.length ? `<div class="muted" style="margin-top:8px;font-size:12px">${info.map(esc).join("<br>")}</div>` : "");
+  };
   if (!g) $("gpu").innerHTML = `<span class="muted">no data</span>`;
   else if (!g.ok) $("gpu").innerHTML = (g.model ? `<div><b>${esc(g.model)}</b></div>` : "") + `<div class="gpu-off" style="margin-top:4px"><b>Utilisation unavailable</b></div><div class="muted" style="margin-top:6px">${esc(g.error || "nvidia-smi failed")}</div>` +
     `<div style="margin-top:10px"><b>Processes holding the GPU</b></div>` + ((g.apps || []).length ? `<table style="margin-top:4px"><tr><th>pid</th><th>process</th><th>job</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : "<b style='color:var(--bad)'>none</b>"}</td></tr>`; }).join("")}</table>` : `<div class="muted">none: the GPU is free</div>`) +
     slotBlock;
-  else $("gpu").innerHTML = g.devices.map((d) => `<div><b>${esc(d.name)}</b> <span class="muted">· ${d.temp_c}°C${d.power_w != null ? ` · ${d.power_w} W` : ""}</span></div>
-      <div style="margin-top:8px">Compute ${d.util}%</div><div class="bar"><i style="width:${d.util}%"></i></div>
-      <div style="margin-top:8px">VRAM ${(d.mem_used_mb/1024).toFixed(1)} / ${(d.mem_total_mb/1024).toFixed(1)} GB</div><div class="bar"><i style="width:${100*d.mem_used_mb/d.mem_total_mb}%"></i></div>`).join("") +
-    (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th>job</th><th class="n">VRAM MB</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : "<b style='color:var(--bad)'>none</b>"}</td><td class="n">${a.mem_mb}</td></tr>`; }).join("")}</table>` : `<div class="muted" style="margin-top:8px">no processes have the GPU open</div>`) + slotBlock;
+  else $("gpu").innerHTML = g.devices.map(gpuDeviceHtml).join("") +
+    (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th>job</th><th class="n">VRAM MB</th><th class="n">SM %</th><th class="n">mem %</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); const sys = !o && a.type === "G"; const v = (x) => x == null ? "–" : x; return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : sys ? "<span class='muted'>display (system)</span>" : "<b style='color:var(--bad)'>none</b>"}</td><td class="n">${v(a.mem_mb)}</td><td class="n">${v(a.sm)}</td><td class="n">${v(a.mem_pct)}</td></tr>`; }).join("")}</table>` : `<div class="muted" style="margin-top:8px">no processes have the GPU open</div>`) + slotBlock;
 
   // jobs
   const shown = [...running, ...queued, ...jobs.filter((j) => !running.includes(j) && !queued.includes(j)).slice(0, 8)];

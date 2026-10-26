@@ -58,6 +58,54 @@ def smi_query(what, fields):
     return [[c.strip() for c in line.split(",")] for line in r.stdout.strip().splitlines() if line.strip()]
 
 
+SMI_EXTRA = [("fan.speed", "fan_pct"), ("pstate", "pstate"), ("clocks.current.graphics", "clock_gr_mhz"), ("clocks.max.graphics", "clock_gr_max_mhz"),
+             ("clocks.current.memory", "clock_mem_mhz"), ("clocks.max.memory", "clock_mem_max_mhz"), ("power.max_limit", "power_max_w"),
+             ("pcie.link.gen.current", "pcie_gen"), ("pcie.link.gen.max", "pcie_gen_max"), ("pcie.link.width.current", "pcie_width"),
+             ("pcie.link.width.max", "pcie_width_max"), ("utilization.encoder", "enc_util"), ("utilization.decoder", "dec_util"),
+             ("memory.reserved", "mem_reserved_mb"), ("clocks_throttle_reasons.active", "throttle")]
+THROTTLE = {0x2: "application clocks", 0x4: "software power cap", 0x8: "hardware slowdown", 0x20: "software thermal limit",
+            0x40: "hardware thermal limit", 0x80: "power brake", 0x100: "display clocks"}
+
+
+def throttle_names(val):
+    """Why the clocks are lowered, from the driver's bit mask; the idle bit (0x1) is normal and reported as 'idle'."""
+    try:
+        m = int(val, 16)
+    except ValueError:
+        return []
+    return (["idle"] if m & 0x1 else []) + [n for bit, n in THROTTLE.items() if m & bit]
+
+
+def cmdline(pid):
+    try:
+        return open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace").strip()[:160]
+    except OSError:
+        return ""
+
+
+def smi_pmon():
+    """Per-process rows of `nvidia-smi pmon -c 1 -s um` (compute and graphics processes): type, SM / memory / encoder / decoder %, VRAM MB."""
+    r = subprocess.run([SMI, "pmon", "-c", "1", "-s", "um"], capture_output=True, text=True, timeout=8)
+    if r.returncode:
+        return []
+    cols, rows = None, []
+    for line in r.stdout.splitlines():
+        if line.startswith("#"):
+            if cols is None:                                                # the first comment line names the columns
+                cols = line.lstrip("# ").split()
+            continue
+        if cols is None or not line.strip():
+            continue
+        p = line.split(None, len(cols) - 1)
+        if len(p) < len(cols) or not p[cols.index("pid")].isdigit():
+            continue
+        row = dict(zip(cols, p))
+        val = lambda k: num(row[k]) if k in row and row[k] != "-" else None
+        rows.append({"pid": int(row["pid"]), "name": row.get("command", ""), "type": row.get("type"), "sm": val("sm"), "mem_pct": val("mem"),
+                     "enc": val("enc"), "dec": val("dec"), "mem_mb": val("fb")})
+    return rows
+
+
 def gpu_info(model, drv):
     """GPU block of the snapshot: utilisation, VRAM, temperature and power when NVML works; otherwise only the device-file holders."""
     apps = gpu_users()                                                      # first: the query below holds the device files itself
@@ -70,18 +118,38 @@ def gpu_info(model, drv):
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, IndexError) as e:
         return {"ok": False, "devices": [], "apps": apps, "model": model,
                 "error": f"{model}: utilisation and VRAM are unavailable ({e}). {drv}"}
-    try:                                                                    # VRAM per process, by pid
-        mem = {int(r[0]): num(r[2]) for r in smi_query("compute-apps", "pid,process_name,used_memory") if r[0].isdigit()}
+    # clocks, fan, power limit, PCIe link, encoder / decoder, throttle reasons: a separate query so an unsupported field cannot take the basics down
+    for fields in (SMI_EXTRA, [f for f in SMI_EXTRA if "throttle" not in f]):
+        try:
+            rows = smi_query("gpu", ",".join(f for f, _ in fields))
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, IndexError):
+            continue
+        for dev, row in zip(devices, rows):
+            for (f, key), val in zip(fields, row):
+                if key == "throttle":
+                    dev[key] = throttle_names(val)
+                else:
+                    dev[key] = val if key == "pstate" else num(val)
+        break
+    # processes: every pid that has the GPU open, graphics ones (the login screen) included, with VRAM and utilisation per process
+    procs = {a["pid"]: a for a in apps}                                     # device-file holders we can read
+    for p in smi_pmon():
+        a = procs.setdefault(p["pid"], {"pid": p["pid"], "name": p["name"]})
+        a.update({k: v for k, v in p.items() if k != "name" and v is not None})
+        if a["name"] == p["name"] or a["name"].startswith("pid "):
+            a["name"] = cmdline(p["pid"]) or p["name"]
+    try:                                                                    # compute processes pmon did not list
+        for r in smi_query("compute-apps", "pid,process_name,used_memory"):
+            if r[0].isdigit():
+                a = procs.setdefault(int(r[0]), {"pid": int(r[0]), "name": cmdline(int(r[0])) or r[1]})
+                if a.get("mem_mb") is None:
+                    a["mem_mb"] = num(r[2])
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, IndexError):
-        mem = {}
-    for a in apps:
-        if mem.get(a["pid"]) is not None:
-            a["mem_mb"] = mem[a["pid"]]
-    held = {a["pid"] for a in apps}
-    for pid, mb in mem.items():                                             # compute processes without an open device file we could read
-        if pid not in held:
-            apps.append({"pid": pid, "name": f"pid {pid}", "mem_mb": mb})
-    return {"ok": True, "devices": devices, "apps": apps, "model": model or devices[0]["name"], "error": None}
+        pass
+    for a in procs.values():
+        a.setdefault("mem_mb", "?")
+    return {"ok": True, "devices": devices, "apps": sorted(procs.values(), key=lambda a: -(a["mem_mb"] if isinstance(a["mem_mb"], (int, float)) else 0)),
+            "model": model or devices[0]["name"], "error": None}
 
 
 RAPL = "/sys/class/powercap/intel-rapl:0"                    # CPU package energy counter (AMD Zen uses the same name)
