@@ -281,6 +281,7 @@ async function cycle() {
   } catch (e) { log("scheduler:", e.message); }
   const st = await statusService(jobs);
   jobs = withUnlistedRunning(jobs, st.host);
+  if (st.host && CFG.installed_ram_gb) st.host.mem_installed_mb = Math.round(CFG.installed_ram_gb * 1024);   // the OS reports ~2 GB less than installed
   const tasks = buildTasks(jobs, st.progress || [], st.host, now);
   const body = { tasks };
   if (cluster) { body.cluster = cluster; body.jobs = jobs; }

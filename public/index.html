@@ -50,6 +50,8 @@
   svg.spark { width:100%; height:56px; display:block; }
   .legend { font-size:12px; color:var(--muted); display:flex; gap:14px; margin-top:6px; }
   .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+  .stack { display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--c0); margin-top:8px; }
+  .stack i { display:block; height:100%; }
   .click { cursor:pointer; }
   .click:hover, .click:focus-visible { border-color:var(--accent); outline:none; }
   .modal-bg { position:fixed; inset:0; background:rgba(10,14,22,.55); display:flex; align-items:flex-start; justify-content:center; padding:4vh 16px; z-index:10; overflow:auto; }
@@ -133,6 +135,16 @@ function tile(label, value, sub, pct, detail) {          // detail = which break
   return `<div class="panel tile${detail ? " click" : ""}"${detail ? ` data-detail="${detail}" role="button" tabindex="0" title="Click to see everything that uses this"` : ""}><div class="s">${label}</div><div class="v">${value}</div><div class="s">${sub || ""}</div>` +
     (pct != null ? `<div class="bar"><i style="width:${Math.min(100, pct)}%"></i></div>` : "") + `</div>`;
 }
+// The host's memory split three ways, so it adds up to what is installed: free (what the kernel can hand out), jobs (resident memory of every
+// process that belongs to a scheduler job), and the system (everything else: the part firmware and kernel take at boot, so the OS never sees it,
+// plus the OS, services and caches). The OS reports less than is installed (30 of 32 GB here), so the feeder passes the installed size.
+// A job's processes that share pages are each counted in full, so the jobs figure is capped at what is actually in use.
+function memBreakdown(h, ownerOf) {
+  const total = Math.max(h.mem_installed_mb || 0, h.mem_total_mb), used = h.mem_total_mb - h.mem_available_mb;
+  const jobsRaw = (h.procs || []).reduce((s, p) => s + (ownerOf(p) ? p.rss_mb : 0), 0), jobs = Math.min(jobsRaw, used);
+  const hw = total - h.mem_total_mb, os = used - jobs;
+  return { total, free: h.mem_available_mb, jobs, hw, os, sys: hw + os, overcounted: jobsRaw > used };
+}
 function heat(p) { return p < 5 ? "var(--c0)" : p < 25 ? "var(--c1)" : p < 50 ? "var(--c2)" : p < 80 ? "var(--c3)" : "var(--c4)"; }
 
 function renderFeed(now, feed) {
@@ -191,19 +203,23 @@ function render({ now, snap, history, feed }) {
     t.push(tile("GPU slots", `${cl.used_gpu_slots}/${cl.gpu_slots}`,
       (cl.used_gpu_slots ? `held by ${esc(holders.join(", ") || "a job")}` : "free") + (h && h.gpu && h.gpu.ok && h.gpu.devices[0] ? ` · <b>GPU ${h.gpu.devices[0].util}% busy</b>` : "") + (gpuWaiting.length ? ` · ${gpuWaiting.length} waiting` : ""),
       100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots), "gpu"));
-    t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb, "memres"));
     const unlisted = cl.running_jobs - running.length;        // the scheduler counts more running jobs than it lists (it lists only the latest 200)
     t.push(tile("Jobs", `${cl.running_jobs} running`, `${cl.queued_jobs} queued` + (unlisted > 0 ? ` · <b style="color:var(--bad)">${unlisted} running not in the list</b>` : "")));
   }
   if (h) {
     const avg = h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length;
     t.push(tile("Actual CPU load", `${avg.toFixed(0)}%`, `load avg ${h.load.join(" / ")}`, avg, "cpu"));
-    const used = h.mem_total_mb - h.mem_available_mb;
-    const ct = h.cpu_temp;                                    // from the status service; absent while an older service is running
+    const ct = h.cpu_temp;                                   // from the status service; absent while an older service is running
     if (ct) t.push(tile("CPU temperature", `${ct.temp_c.toFixed(0)} °C`, ct.sensors.filter((s) => s !== ct && s.label !== ct.label).map((s) => `${s.label} ${s.temp_c.toFixed(0)}°`).join(" · ") || ct.label, ct.temp_c));
     const cp = h.cpu_power;                                   // watts from the CPU package energy counter; null with a reason while it is root-only
     if (cp) t.push(cp.watts != null ? tile("CPU power", `${cp.watts.toFixed(0)} W`, cp.source) : tile("CPU power", "unavailable", cp.reason));
-    t.push(tile("RAM in use", `${(used/1024).toFixed(1)} GB`, `of ${(h.mem_total_mb/1024).toFixed(1)} GB`, 100 * used / h.mem_total_mb, "ram"));
+    // memory of the whole host split three ways: the system (OS, services, kernel, caches), the jobs, and what is free
+    const m = memBreakdown(h, ownerOf), seg = (mb, color) => `<i style="width:${100 * mb / m.total}%;background:${color}"></i>`;
+    const dot = (color) => `<i class="dot" style="background:${color}"></i>`;
+    t.push(`<div class="panel tile click" data-detail="memory" role="button" tabindex="0" title="Click to see everything that uses the memory" style="grid-column:span 2">` +
+      `<div class="s">Memory · ${(m.total / 1024).toFixed(1)} GB</div><div class="v">${(m.free / 1024).toFixed(1)} GB free</div>` +
+      `<div class="s">${dot("var(--muted)")}System &amp; other ${(m.sys / 1024).toFixed(1)} GB · ${dot("var(--accent)")}Jobs ${(m.jobs / 1024).toFixed(1)} GB · ${dot("var(--c1)")}Free ${(m.free / 1024).toFixed(1)} GB</div>` +
+      `<div class="stack">${seg(m.sys, "var(--muted)")}${seg(m.jobs, "var(--accent)")}${seg(m.free, "var(--c1)")}</div></div>`);
   }
   $("tiles").innerHTML = t.join("");
 
@@ -299,7 +315,7 @@ function render({ now, snap, history, feed }) {
 
 // ---------------------------------------------------------------- "what uses it": click a tile to see every user of that resource
 let ctx = null, openKind = null, lastModal = "", onCore = {};
-const DETAIL_TITLES = { cores: "CPU cores: what runs on each core", cpu: "CPU: everything using it", gpu: "GPU: everything using it", memres: "Reserved memory: who the scheduler reserved it for", ram: "RAM in use: everything holding memory" };
+const DETAIL_TITLES = { cores: "CPU cores: what runs on each core", cpu: "CPU: everything using it", gpu: "GPU: everything using it", memory: "Memory: system, jobs and free" };
 const gb = (mb) => (mb / 1024).toFixed(1);
 const who = (j) => `${esc(j.client_id)} · ${esc(j.project)}`;
 const short = (s, n = 100) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -377,31 +393,40 @@ function detailHtml(kind) {
       (d ? `<p class="muted">These processes account for ${acc} MB of the ${d.mem_used_mb.toFixed(0)} MB in use; the rest is memory the driver reserves.</p>` : "");
   }
 
-  if (kind === "memres") {
-    const rows = byDesc((j) => j.memory_mb || 0).map((j) => { const x = use(j), res = j.memory_mb || 0;
+  if (kind === "memory") {
+    if (!h) return `<p class="muted">no host data yet</p>`;
+    const m = memBreakdown(h, ownerOf), pc = (x) => (100 * x / m.total).toFixed(0) + "%";
+    const seg = (mb, color) => `<i style="width:${100 * mb / m.total}%;background:${color}"></i>`;
+    const dot = (color) => `<i class="dot" style="background:${color}"></i>`;
+    const gap = cl.available_memory_mb - m.free;
+    const reservedTotal = running.reduce((s, j) => s + (j.memory_mb || 0), 0);
+    const jobRows = byDesc((j) => use(j).rss).map((j) => { const x = use(j), res = j.memory_mb || 0;
       const note = !res ? "<span class='warn'>nothing reserved: the scheduler does not count this job's memory</span>" : x.rss > res ? `<span class='warn'>uses ${gb(x.rss - res)} GB more than reserved</span>` : "within its reservation";
       return `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(res ? gb(res) + " GB" : "<span class='muted'>none</span>", "n")}${td(gb(x.rss) + " GB", "n")}${td(note)}${td(fmtDur(now - j.started_ts), "n")}</tr>`; });
-    const gap = h ? cl.available_memory_mb - h.mem_available_mb : 0;
-    return `<p>Scheduler: <b>${gb(cl.used_memory_mb)} GB</b> reserved of ${gb(cl.memory_slots_mb)} GB schedulable (host ${gb(cl.memory_total_mb)} GB minus ${gb(cl.memory_reserve_mb)} GB kept back); it believes ${gb(cl.available_memory_mb)} GB is free.` +
-      (h ? ` The host really has <b>${gb(h.mem_available_mb)} GB</b> available${gap > 512 ? ` <span class="warn">(${gb(gap)} GB less than the scheduler thinks, so a job that needs that memory can sit waiting while holding its slots)</span>` : ""}.` : "") + `</p>` + unlisted +
-      `<h3>Running jobs: reserved against actually used</h3>` + tbl([["who"], ["job"], ["reserved", "n"], ["using now", "n"], ["status"], ["running", "n"]], rows, "no running jobs") +
-      `<h3>Waiting jobs and the memory they ask for</h3>` + queueTable();
+    if (jobRows.length) jobRows.push(`<tr class="total">${td("total")}${td("")}${td(gb(reservedTotal) + " GB", "n")}${td(gb(running.reduce((s, j) => s + use(j).rss, 0)) + " GB", "n")}${td("")}${td("")}</tr>`);
+    const sysRows = u.other.slice().sort((a, b) => b.rss - a.rss).filter((o) => o.rss >= 20).map((o) => { const top = o.procs.slice().sort((a, b) => b.rss_mb - a.rss_mb)[0];
+      return `<tr>${td(`<b>${esc(o.user)}</b>`)}${td(o.n, "n")}${td(gb(o.rss) + " GB", "n")}${td(esc(short(top.cmd, 100)), "cmd")}</tr>`; });
+    const sysListed = u.other.reduce((s, o) => s + o.rss, 0);
+    const top = (h.procs || []).slice().sort((a, b) => b.rss_mb - a.rss_mb).slice(0, 12).map((p) => { const o = ownerOf(p);
+      return `<tr>${td(o ? `<b>${who(o)}</b>` : `${esc(p.user)} <span class="muted">(system)</span>`)}${td(p.pid, "n")}${td(gb(p.rss_mb) + " GB", "n")}${td(fmtDur(p.etimes), "n")}${td(esc(short(p.cmd, 100)), "cmd")}</tr>`; });
+    return `<div class="stack" style="height:16px">${seg(m.hw, "var(--text)")}${seg(m.os, "var(--muted)")}${seg(m.jobs, "var(--accent)")}${seg(m.free, "var(--c1)")}</div>` +
+      `<p>${dot("var(--muted)")}<b>System &amp; other ${gb(m.sys)} GB</b> (${pc(m.sys)}) · ${dot("var(--accent)")}<b>Jobs ${gb(m.jobs)} GB</b> (${pc(m.jobs)}) · ${dot("var(--c1)")}<b>Free ${gb(m.free)} GB</b> (${pc(m.free)}) · of ${gb(m.total)} GB installed</p>` + unlisted +
+      `<h3>Jobs: ${gb(m.jobs)} GB in use, ${gb(reservedTotal)} GB reserved with the scheduler</h3>` +
+      `<p class="muted">A reservation is what a job asked the scheduler for; "using now" is what its processes really hold. The scheduler plans with the reservation, the host runs out of the real figure.</p>` +
+      tbl([["who"], ["job"], ["reserved", "n"], ["using now", "n"], ["status"], ["running", "n"]], jobRows, "no running jobs") +
+      `<h3>System &amp; other: ${gb(m.sys)} GB</h3>` +
+      `<p>${dot("var(--text)")}<b>${gb(m.hw)} GB reserved before the OS starts</b>: the firmware (including the integrated graphics' carve-out) and the kernel's own tables. The OS sees ${gb(h.mem_total_mb)} GB of the ${gb(m.total)} GB installed.<br>` +
+      `${dot("var(--muted)")}<b>${gb(m.os)} GB used by the OS and services</b>: ${gb(sysListed)} GB in the processes below, the rest is the kernel and caches. The scheduler keeps ${gb(cl.memory_reserve_mb)} GB back for this` +
+      `${m.os > cl.memory_reserve_mb ? ` <span class="warn">and it uses more than that</span>` : ", and it uses less"}.</p>` +
+      tbl([["OS user"], ["processes", "n"], ["RAM", "n"], ["biggest process"]], sysRows, "nothing significant") +
+      `<h3>Free: ${gb(m.free)} GB</h3>` +
+      `<p>The host really has <b>${gb(m.free)} GB</b> available. The scheduler believes <b>${gb(cl.available_memory_mb)} GB</b> is free (${gb(cl.memory_slots_mb)} GB schedulable minus ${gb(cl.used_memory_mb)} GB reserved)` +
+      `${gap > 512 ? `. <span class="warn">That is ${gb(gap)} GB more than there is: a job asking for more than ${gb(m.free)} GB is still admitted, takes its slots, and then waits for memory.</span>` : "."}</p>` +
+      `<h3>Waiting jobs and the memory they ask for</h3>` + queueTable() +
+      `<h3>Biggest processes</h3>` + tbl([["owner"], ["pid", "n"], ["RAM", "n"], ["running", "n"], ["command"]], top, "none") +
+      `<p class="muted">Memory is each process's resident size. Processes of one job that share pages are counted in full each time${m.overcounted ? ", which here makes the jobs add up to more than is in use, so the jobs figure is capped" : ""}.</p>`;
   }
 
-  if (kind === "ram") {
-    if (!h) return `<p class="muted">no host data yet</p>`;
-    const used = h.mem_total_mb - h.mem_available_mb;
-    const owners = [...u.per.values()].map((b) => ({ label: `<b>${who(b.job)}</b>`, ...b })).concat(u.other.map((b) => ({ label: `${esc(b.user)} <span class="muted">(outside any listed job)</span>`, ...b })))
-      .sort((a, b) => b.rss - a.rss).slice(0, 15);
-    const listed = [...u.per.values(), ...u.other].reduce((s, b) => s + b.rss, 0);
-    const top = ((h.procs) || []).slice().sort((a, b) => b.rss_mb - a.rss_mb).slice(0, 15).map((p) => { const o = ownerOf(p);
-      return `<tr>${td(o ? `<b>${who(o)}</b>` : esc(p.user))}${td(p.pid, "n")}${td(gb(p.rss_mb) + " GB", "n")}${td(p.cpu.toFixed(1), "n")}${td(fmtDur(p.etimes), "n")}${td(esc(short(p.cmd, 100)), "cmd")}</tr>`; });
-    return `<p><b>${gb(used)} GB</b> in use of ${gb(h.mem_total_mb)} GB, <b>${gb(h.mem_available_mb)} GB</b> available.</p>` + unlisted +
-      `<h3>Who holds it</h3>` + tbl([["owner"], ["processes", "n"], ["RAM", "n"], ["share of used", "n"]],
-        owners.map((o) => `<tr>${td(o.label)}${td(o.n, "n")}${td(gb(o.rss) + " GB", "n")}${td((100 * o.rss / used).toFixed(0) + "%", "n")}</tr>`), "nothing") +
-      `<h3>Biggest processes</h3>` + tbl([["owner"], ["pid", "n"], ["RAM", "n"], ["CPU %", "n"], ["running", "n"], ["command"]], top, "none") +
-      `<p class="muted">The processes sampled hold ${gb(listed)} GB. The rest of the memory in use is the kernel, caches and processes not in the sampled list.</p>`;
-  }
   return "";
 }
 

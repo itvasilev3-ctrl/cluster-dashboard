@@ -3,6 +3,7 @@
  "refresh_minutes": 5,
  "astra_root": "C:\\Dev\\ASTRA",
  "client_id": "ivaylo",
+ "installed_ram_gb": 32,
  "status_service": {
   "host": "100.66.143.117",
   "port": 8818,
