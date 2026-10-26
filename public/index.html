@@ -50,6 +50,18 @@
   svg.spark { width:100%; height:56px; display:block; }
   .legend { font-size:12px; color:var(--muted); display:flex; gap:14px; margin-top:6px; }
   .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+  .click { cursor:pointer; }
+  .click:hover, .click:focus-visible { border-color:var(--accent); outline:none; }
+  .modal-bg { position:fixed; inset:0; background:rgba(10,14,22,.55); display:flex; align-items:flex-start; justify-content:center; padding:4vh 16px; z-index:10; overflow:auto; }
+  .modal-bg[hidden] { display:none; }
+  .modal { width:min(1100px,100%); }
+  .modal-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:6px; }
+  .modal-head h2 { margin:0; font-size:15px; text-transform:none; letter-spacing:0; color:var(--text); }
+  .modal h3 { margin:18px 0 6px; font-size:12px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .modal p { margin:6px 0; }
+  .modal tr.total td { font-weight:650; border-top:2px solid var(--line); }
+  .modal .warn { color:var(--bad); font-weight:600; }
+  button.pill { background:none; color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
 </style>
 </head>
 <body>
@@ -70,7 +82,7 @@
   </section>
 
   <section class="two">
-    <div class="panel">
+    <div class="panel click" data-detail="cores" role="button" tabindex="0" title="Click to see what runs on each core">
       <h2>CPU cores <span id="coreNote" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
       <div class="cores" id="cores"></div>
       <svg class="spark" id="spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
@@ -102,6 +114,13 @@
   </section>
 </main>
 
+<div id="modalBg" class="modal-bg" hidden>
+  <div class="panel modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" class="pill" type="button">Close ✕</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
@@ -109,8 +128,8 @@ const fmtAge = (s) => s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s/
 const fmtDur = (s) => { s = Math.round(s); const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d?`${d}d ${h}h`:h?`${h}h ${m}m`:m?`${m}m ${s%60}s`:`${s}s`; };
 let sortKey = "cpu", sortDir = -1;
 
-function tile(label, value, sub, pct) {
-  return `<div class="panel tile"><div class="s">${label}</div><div class="v">${value}</div><div class="s">${sub || ""}</div>` +
+function tile(label, value, sub, pct, detail) {          // detail = which breakdown opens when the tile is clicked
+  return `<div class="panel tile${detail ? " click" : ""}"${detail ? ` data-detail="${detail}" role="button" tabindex="0" title="Click to see everything that uses this"` : ""}><div class="s">${label}</div><div class="v">${value}</div><div class="s">${sub || ""}</div>` +
     (pct != null ? `<div class="bar"><i style="width:${Math.min(100, pct)}%"></i></div>` : "") + `</div>`;
 }
 function heat(p) { return p < 5 ? "var(--c0)" : p < 25 ? "var(--c1)" : p < 50 ? "var(--c2)" : p < 80 ? "var(--c3)" : "var(--c4)"; }
@@ -163,24 +182,24 @@ function render({ now, snap, history, feed }) {
   // tiles
   const t = [];
   if (cl) {
-    t.push(tile("CPU slots", `${cl.used_cpu_slots}/${cl.cpu_slots}`, `${cl.available_cpu_slots} free · ${cl.cpu_reserve} reserved of ${cl.logical_cpus}`, 100 * cl.used_cpu_slots / cl.cpu_slots));
+    t.push(tile("CPU slots", `${cl.used_cpu_slots}/${cl.cpu_slots}`, `${cl.available_cpu_slots} free · ${cl.cpu_reserve} reserved of ${cl.logical_cpus}`, 100 * cl.used_cpu_slots / cl.cpu_slots, "cpu"));
     const holders = gpuHolders.length ? [...new Set(gpuHolders.map((j) => `${j.client_id} · ${j.project}`))] : heldBy;
     t.push(tile("GPU slots", `${cl.used_gpu_slots}/${cl.gpu_slots}`,
       (cl.used_gpu_slots ? `held by ${esc(holders.join(", ") || "a job")}` : "free") + (gpuWaiting.length ? ` · ${gpuWaiting.length} waiting` : ""),
-      100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots)));
-    t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb));
+      100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots), "gpu"));
+    t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb, "memres"));
     const unlisted = cl.running_jobs - running.length;        // the scheduler counts more running jobs than it lists (it lists only the latest 200)
     t.push(tile("Jobs", `${cl.running_jobs} running`, `${cl.queued_jobs} queued` + (unlisted > 0 ? ` · <b style="color:var(--bad)">${unlisted} running not in the list</b>` : "")));
   }
   if (h) {
     const avg = h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length;
-    t.push(tile("Actual CPU load", `${avg.toFixed(0)}%`, `load avg ${h.load.join(" / ")}`, avg));
+    t.push(tile("Actual CPU load", `${avg.toFixed(0)}%`, `load avg ${h.load.join(" / ")}`, avg, "cpu"));
     const used = h.mem_total_mb - h.mem_available_mb;
     const ct = h.cpu_temp;                                    // from the status service; absent while an older service is running
     if (ct) t.push(tile("CPU temperature", `${ct.temp_c.toFixed(0)} °C`, ct.sensors.filter((s) => s !== ct && s.label !== ct.label).map((s) => `${s.label} ${s.temp_c.toFixed(0)}°`).join(" · ") || ct.label, ct.temp_c));
     const cp = h.cpu_power;                                   // watts from the CPU package energy counter; null with a reason while it is root-only
     if (cp) t.push(cp.watts != null ? tile("CPU power", `${cp.watts.toFixed(0)} W`, cp.source) : tile("CPU power", "unavailable", cp.reason));
-    t.push(tile("RAM in use", `${(used/1024).toFixed(1)} GB`, `of ${(h.mem_total_mb/1024).toFixed(1)} GB`, 100 * used / h.mem_total_mb));
+    t.push(tile("RAM in use", `${(used/1024).toFixed(1)} GB`, `of ${(h.mem_total_mb/1024).toFixed(1)} GB`, 100 * used / h.mem_total_mb, "ram"));
   }
   $("tiles").innerHTML = t.join("");
 
@@ -188,9 +207,16 @@ function render({ now, snap, history, feed }) {
   if (h) {
     const n = h.cores.length;
     $("cores").style.gridTemplateColumns = `repeat(${n > 16 ? 8 : 4}, 1fr)`;
-    $("cores").innerHTML = h.cores.map((c) => `<div class="core ${c.busy >= 50 ? "hot" : ""}" style="background:${heat(c.busy)}" title="core ${c.id}: user ${c.user}% · nice ${c.nice}% · sys ${c.sys}% · iowait ${c.iowait}%">${c.id}<b>${Math.round(c.busy)}%</b></div>`).join("");
-    const busy = h.cores.filter((c) => c.busy >= 50).length;
-    $("coreNote").textContent = `· ${busy} of ${n} cores busy`;
+    // who runs on each core: the threads the status service saw using at least 2% of a core in its 1 s sample, mapped to their job
+    onCore = {};
+    for (const [pid, core, pct] of h.threads || []) {
+      const p = byPid.get(pid), o = p && ownerOf(p);
+      (onCore[core] ||= []).push({ pid, pct, who: o ? `${o.client_id} · ${o.project}` : p ? `${p.user} (no job)` : "?", cmd: p ? p.cmd : "" });
+    }
+    $("cores").innerHTML = h.cores.map((c) => { const on = (onCore[c.id] || []).sort((a, b) => b.pct - a.pct).map((t) => `${t.who}, pid ${t.pid}, ${t.pct.toFixed(0)}%`).join("\n");
+      return `<div class="core ${c.busy >= 50 ? "hot" : ""}" style="background:${heat(c.busy)}" title="core ${c.id}: user ${c.user}% · nice ${c.nice}% · sys ${c.sys}% · iowait ${c.iowait}%${on ? "\n" + esc(on) : ""}">${c.id}<b>${Math.round(c.busy)}%</b></div>`; }).join("");
+    const busy = h.cores.filter((c) => c.busy >= 50).length, work = h.cores.reduce((s, c) => s + c.busy, 0) / 100;
+    $("coreNote").textContent = `· ${busy} of ${n} cores above 50% · load = ${work.toFixed(1)} cores of work (${(100 * work / n).toFixed(0)}%)`;
   }
 
   // sparkline
@@ -260,7 +286,134 @@ function render({ now, snap, history, feed }) {
   const th = (k, l, cls = "") => `<th class="${cls}" data-k="${k}">${l}${sortKey === k ? (sortDir < 0 ? " ▾" : " ▴") : ""}</th>`;
   $("procs").innerHTML = `<tr>${th("who", "who")}${th("user", "OS user")}${th("pid", "pid", "n")}${th("cpu", "CPU %", "n")}${th("mem", "MEM %", "n")}${th("etimes", "running", "n")}<th>command</th></tr>` +
     (rows.slice(0, 80).map((p) => `<tr><td class="user">${esc(p.owner ? p.owner.client_id : p.user)}</td><td class="muted">${esc(p.user)}</td><td class="n">${p.pid}</td><td class="n">${p.cpu.toFixed(1)}</td><td class="n">${p.mem.toFixed(1)}</td><td class="n">${fmtDur(p.etimes)}</td><td class="cmd">${esc(p.cmd)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">nothing to show</td></tr>`);
+
+  ctx = { now, snap, jobs, running, queued, h, cl, g, ownerOf, byPid, onCore };
+  if (openKind) paintDetail();                                  // keep an open window live
 }
+
+// ---------------------------------------------------------------- "what uses it": click a tile to see every user of that resource
+let ctx = null, openKind = null, lastModal = "", onCore = {};
+const DETAIL_TITLES = { cores: "CPU cores: what runs on each core", cpu: "CPU: everything using it", gpu: "GPU: everything using it", memres: "Reserved memory: who the scheduler reserved it for", ram: "RAM in use: everything holding memory" };
+const gb = (mb) => (mb / 1024).toFixed(1);
+const who = (j) => `${esc(j.client_id)} · ${esc(j.project)}`;
+const short = (s, n = 100) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const td = (v, c) => `<td${c ? ` class="${c}"` : ""}>${v}</td>`;
+const tbl = (head, rows, empty) => `<div class="scroll" style="max-height:none"><table><tr>${head.map(([l, c]) => `<th class="${c || ""}" style="cursor:default">${l}</th>`).join("")}</tr>` +
+  `${rows.join("") || `<tr><td colspan="${head.length}" class="muted">${empty || "none"}</td></tr>`}</table></div>`;
+
+// CPU, RAM and process count per job (its whole process tree), and per OS user for the processes outside every listed job
+function usageOf(c) {
+  const per = new Map(), other = new Map();
+  for (const p of (c.h && c.h.procs) || []) {
+    const o = c.ownerOf(p), m = o ? per : other, key = o ? o.job_id : p.user;
+    let b = m.get(key);
+    if (!b) { b = { job: o, user: p.user, cores: 0, rss: 0, n: 0, procs: [] }; m.set(key, b); }
+    b.cores += p.cpu / 100; b.rss += p.rss_mb; b.n++; b.procs.push(p);
+  }
+  return { per, other: [...other.values()] };
+}
+
+function detailHtml(kind) {
+  const { now, jobs, running, queued, h, cl, g, ownerOf, byPid } = ctx;
+  if (!cl) return `<p class="muted">no scheduler data yet</p>`;
+  const u = usageOf(ctx);
+  const use = (j) => u.per.get(j.job_id) || { cores: 0, rss: 0, n: 0, procs: [] };
+  const unlisted = cl.running_jobs > running.length ? `<p class="warn">The scheduler counts ${cl.running_jobs} running jobs but only ${running.length} are listed here.</p>` : "";
+  const byDesc = (key) => [...running].sort((a, b) => key(b) - key(a));
+  const queueTable = () => tbl([["who"], ["job"], ["CPU", "n"], ["GPU", "n"], ["memory", "n"], ["waiting", "n"]],
+    queued.map((j) => `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(j.cpu_slots, "n")}${td(j.gpu_slots, "n")}${td(j.memory_mb ? gb(j.memory_mb) + " GB" : "–", "n")}${td(fmtDur(now - j.created_ts), "n")}</tr>`), "nothing is waiting");
+
+  if (kind === "cpu") {
+    const avg = h ? h.cores.reduce((s, c) => s + c.busy, 0) / h.cores.length : 0, busy = h ? h.cores.filter((c) => c.busy >= 50).length : 0;
+    const rows = byDesc((j) => j.cpu_slots).map((j) => { const x = use(j);
+      return `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(j.cpu_slots, "n")}${td(x.cores.toFixed(2), "n")}${td(j.cpu_slots ? (100 * x.cores / j.cpu_slots).toFixed(0) + "%" : "", "n")}${td(gb(x.rss) + " GB", "n")}${td(fmtDur(now - j.started_ts), "n")}</tr>`; });
+    const slots = running.reduce((s, j) => s + j.cpu_slots, 0), cores = running.reduce((s, j) => s + use(j).cores, 0);
+    if (rows.length) rows.push(`<tr class="total">${td("total")}${td("")}${td(slots, "n")}${td(cores.toFixed(2), "n")}${td(slots ? (100 * cores / slots).toFixed(0) + "%" : "", "n")}${td("")}${td("")}</tr>`);
+    const others = u.other.filter((o) => o.cores >= 0.03).sort((a, b) => b.cores - a.cores).map((o) => { const top = o.procs.slice().sort((a, b) => b.cpu - a.cpu)[0];
+      return `<tr>${td(`<b>${esc(o.user)}</b>`)}${td(o.n, "n")}${td(o.cores.toFixed(2), "n")}${td(gb(o.rss) + " GB", "n")}${td(esc(short(top.cmd, 110)), "cmd")}</tr>`; });
+    return `<p>Scheduler: <b>${cl.used_cpu_slots} of ${cl.cpu_slots}</b> CPU slots reserved, ${cl.available_cpu_slots} free (${cl.cpu_reserve} of the host's ${cl.logical_cpus} logical CPUs are kept back for the system).` +
+      (h ? ` Actually busy now: <b>${avg.toFixed(0)}%</b> on average, ${busy} of ${h.cores.length} cores above 50%.` : "") + `</p>` + unlisted +
+      `<p class="muted">A slot is a reservation. "Cores busy now" is what the job's processes really use, so a low "of reservation" means the job holds slots it is not using.</p>` +
+      `<h3>Jobs holding CPU slots</h3>` + tbl([["who"], ["job"], ["slots", "n"], ["cores busy now", "n"], ["of reservation", "n"], ["RAM", "n"], ["running", "n"]], rows, "no running jobs") +
+      `<h3>Waiting for CPU slots</h3>` + queueTable() +
+      `<h3>CPU used outside any listed job (by OS user)</h3>` + tbl([["OS user"], ["processes", "n"], ["cores busy now", "n"], ["RAM", "n"], ["busiest process"]], others, "nothing significant");
+  }
+
+  if (kind === "cores") {
+    if (!h) return `<p class="muted">no host data yet</p>`;
+    const n = h.cores.length, work = h.cores.reduce((s, c) => s + c.busy, 0) / 100, busy = h.cores.filter((c) => c.busy >= 50).length;
+    const active = h.cores.filter((c) => c.busy >= 1).sort((a, b) => b.busy - a.busy);
+    const rows = active.map((c) => { const on = (ctx.onCore[c.id] || []).slice().sort((a, b) => b.pct - a.pct);
+      const by = on.length ? on.map((t) => `<b>${esc(t.who)}</b> · pid ${t.pid} · ${t.pct.toFixed(0)}%<br><span class="muted">${esc(short(t.cmd, 100))}</span>`).join("<br>") : "<span class='muted'>kernel work or short-lived processes</span>";
+      return `<tr>${td(c.id)}${td(c.busy.toFixed(0) + "%", "n")}${td(`user ${c.user}% · nice ${c.nice}% · sys ${c.sys}% · iowait ${c.iowait}%`)}${td(by, "cmd")}</tr>`; });
+    return `<p><b>${busy}</b> of ${n} cores are above 50%. Together the cores do <b>${work.toFixed(2)}</b> cores of work, ${(100 * work / n).toFixed(1)}% of the host, from a 1 s sample.` +
+      ` ${n - active.length} cores are idle (below 1%).</p>` + unlisted +
+      `<p class="muted">The scheduler has reserved ${cl.used_cpu_slots} of ${cl.cpu_slots} CPU slots; click the CPU slots tile to compare each job's reservation with what it really uses. ` +
+      `Scheduled jobs run at low priority, so their time shows as "nice". Only threads using at least 2% of a core are attributed to a job.</p>` +
+      `<h3>Cores in use</h3>` + tbl([["core"], ["busy", "n"], ["time split"], ["what runs on it"]], rows, "every core is idle");
+  }
+
+  if (kind === "gpu") {
+    const apps = (g && g.apps) || [], d = g && g.ok && g.devices[0];
+    const appJob = (a) => ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 });
+    const holders = running.filter((j) => j.gpu_slots > 0).map((j) => {
+      const mine = apps.filter((a) => (appJob(a) || {}).job_id === j.job_id), mb = mine.reduce((s, a) => s + (typeof a.mem_mb === "number" ? a.mem_mb : 0), 0);
+      return `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(j.gpu_slots, "n")}${td(j.cpu_slots, "n")}${td(mine.length ? "<b>in use</b>" : "<span class='muted'>idle: slot held, device not opened</span>")}${td(mine.length ? mb : "–", "n")}${td(fmtDur(now - j.started_ts), "n")}</tr>`; });
+    const procs = apps.map((a) => { const o = appJob(a), sys = !o && a.type === "G", v = (x) => (x == null ? "–" : x);
+      return `<tr>${td(a.pid)}${td(esc(short(a.name, 90)), "cmd")}${td(o ? who(o) : sys ? "<span class='muted'>display (system)</span>" : "<b class='warn'>no job</b>")}${td(v(a.mem_mb), "n")}${td(v(a.sm), "n")}${td(v(a.mem_pct), "n")}</tr>`; });
+    const acc = apps.reduce((s, a) => s + (typeof a.mem_mb === "number" ? a.mem_mb : 0), 0);
+    return `<p>Scheduler: <b>${cl.used_gpu_slots} of ${cl.gpu_slots}</b> GPU slot${cl.gpu_slots === 1 ? "" : "s"} in use. ` +
+      (d ? `${esc(d.name)}: compute <b>${d.util}%</b>, VRAM <b>${gb(d.mem_used_mb)} / ${gb(d.mem_total_mb)} GB</b>${d.power_w != null ? `, <b>${d.power_w.toFixed(0)} W</b>` : ""}, ${d.temp_c}°C.` : `GPU readings unavailable${g && g.error ? ": " + esc(g.error) : ""}.`) + `</p>` + unlisted +
+      `<h3>Jobs holding the GPU slot</h3>` + tbl([["who"], ["job"], ["GPU slots", "n"], ["CPU slots", "n"], ["GPU"], ["VRAM MB", "n"], ["running", "n"]], holders, "the GPU slot is free") +
+      `<h3>Waiting for the GPU slot</h3>` + tbl([["who"], ["job"], ["CPU", "n"], ["GPU", "n"], ["memory", "n"], ["waiting", "n"]],
+        queued.filter((j) => j.gpu_slots > 0).map((j) => `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(j.cpu_slots, "n")}${td(j.gpu_slots, "n")}${td(j.memory_mb ? gb(j.memory_mb) + " GB" : "–", "n")}${td(fmtDur(now - j.created_ts), "n")}</tr>`), "nothing is waiting for the GPU") +
+      `<h3>Processes with the GPU open</h3>` + tbl([["pid"], ["process"], ["job"], ["VRAM MB", "n"], ["SM %", "n"], ["mem %", "n"]], procs, "none") +
+      (d ? `<p class="muted">These processes account for ${acc} MB of the ${d.mem_used_mb.toFixed(0)} MB in use; the rest is memory the driver reserves.</p>` : "");
+  }
+
+  if (kind === "memres") {
+    const rows = byDesc((j) => j.memory_mb || 0).map((j) => { const x = use(j), res = j.memory_mb || 0;
+      const note = !res ? "<span class='warn'>nothing reserved: the scheduler does not count this job's memory</span>" : x.rss > res ? `<span class='warn'>uses ${gb(x.rss - res)} GB more than reserved</span>` : "within its reservation";
+      return `<tr>${td(`<b>${who(j)}</b>`)}${td(j.job_id.slice(-6))}${td(res ? gb(res) + " GB" : "<span class='muted'>none</span>", "n")}${td(gb(x.rss) + " GB", "n")}${td(note)}${td(fmtDur(now - j.started_ts), "n")}</tr>`; });
+    const gap = h ? cl.available_memory_mb - h.mem_available_mb : 0;
+    return `<p>Scheduler: <b>${gb(cl.used_memory_mb)} GB</b> reserved of ${gb(cl.memory_slots_mb)} GB schedulable (host ${gb(cl.memory_total_mb)} GB minus ${gb(cl.memory_reserve_mb)} GB kept back); it believes ${gb(cl.available_memory_mb)} GB is free.` +
+      (h ? ` The host really has <b>${gb(h.mem_available_mb)} GB</b> available${gap > 512 ? ` <span class="warn">(${gb(gap)} GB less than the scheduler thinks, so a job that needs that memory can sit waiting while holding its slots)</span>` : ""}.` : "") + `</p>` + unlisted +
+      `<h3>Running jobs: reserved against actually used</h3>` + tbl([["who"], ["job"], ["reserved", "n"], ["using now", "n"], ["status"], ["running", "n"]], rows, "no running jobs") +
+      `<h3>Waiting jobs and the memory they ask for</h3>` + queueTable();
+  }
+
+  if (kind === "ram") {
+    if (!h) return `<p class="muted">no host data yet</p>`;
+    const used = h.mem_total_mb - h.mem_available_mb;
+    const owners = [...u.per.values()].map((b) => ({ label: `<b>${who(b.job)}</b>`, ...b })).concat(u.other.map((b) => ({ label: `${esc(b.user)} <span class="muted">(outside any listed job)</span>`, ...b })))
+      .sort((a, b) => b.rss - a.rss).slice(0, 15);
+    const listed = [...u.per.values(), ...u.other].reduce((s, b) => s + b.rss, 0);
+    const top = ((h.procs) || []).slice().sort((a, b) => b.rss_mb - a.rss_mb).slice(0, 15).map((p) => { const o = ownerOf(p);
+      return `<tr>${td(o ? `<b>${who(o)}</b>` : esc(p.user))}${td(p.pid, "n")}${td(gb(p.rss_mb) + " GB", "n")}${td(p.cpu.toFixed(1), "n")}${td(fmtDur(p.etimes), "n")}${td(esc(short(p.cmd, 100)), "cmd")}</tr>`; });
+    return `<p><b>${gb(used)} GB</b> in use of ${gb(h.mem_total_mb)} GB, <b>${gb(h.mem_available_mb)} GB</b> available.</p>` + unlisted +
+      `<h3>Who holds it</h3>` + tbl([["owner"], ["processes", "n"], ["RAM", "n"], ["share of used", "n"]],
+        owners.map((o) => `<tr>${td(o.label)}${td(o.n, "n")}${td(gb(o.rss) + " GB", "n")}${td((100 * o.rss / used).toFixed(0) + "%", "n")}</tr>`), "nothing") +
+      `<h3>Biggest processes</h3>` + tbl([["owner"], ["pid", "n"], ["RAM", "n"], ["CPU %", "n"], ["running", "n"], ["command"]], top, "none") +
+      `<p class="muted">The processes sampled hold ${gb(listed)} GB. The rest of the memory in use is the kernel, caches and processes not in the sampled list.</p>`;
+  }
+  return "";
+}
+
+function paintDetail() {
+  if (!openKind || !ctx) return;
+  $("modalTitle").textContent = DETAIL_TITLES[openKind] || "";
+  const html = detailHtml(openKind);
+  if (html !== lastModal) { $("modalBody").innerHTML = html; lastModal = html; }
+}
+function openDetail(kind) { openKind = kind; lastModal = ""; $("modalBg").hidden = false; paintDetail(); }
+function closeDetail() { openKind = null; $("modalBg").hidden = true; }
+document.addEventListener("click", (e) => { const t = e.target.closest("[data-detail]"); if (t) openDetail(t.dataset.detail); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeDetail();
+  else if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches("[data-detail]")) { e.preventDefault(); openDetail(e.target.dataset.detail); }
+});
+$("modalClose").addEventListener("click", closeDetail);
+$("modalBg").addEventListener("click", (e) => { if (e.target === $("modalBg")) closeDetail(); });
 
 let last = null;
 async function tick() {
