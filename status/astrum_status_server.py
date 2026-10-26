@@ -219,9 +219,9 @@ def thread_times():
 
 
 def probe():
-    e0, t0 = rapl_read(), time.monotonic()
+    rapl0, mono0 = rapl_read(), time.monotonic()                            # (not t0 / t1: the thread loop below reuses t1)
     a = read_stat(); ta = thread_times(); time.sleep(1.0); b = read_stat(); tb = thread_times()
-    e1, t1 = rapl_read(), time.monotonic()
+    rapl1, mono1 = rapl_read(), time.monotonic()
     threads, pcpu = [], {}                                                  # current use over this 1 s, not the lifetime average
     for k, (t1, core) in tb.items():
         if k in ta:
@@ -259,7 +259,7 @@ def probe():
     gpu = gpu_info(model, drv)
     return {"ts": time.time(), "hostname": os.uname().nodename, "load": [float(x) for x in open("/proc/loadavg").read().split()[:3]],
             "mem_total_mb": mem.get("MemTotal", 0), "mem_available_mb": mem.get("MemAvailable", 0), "cores": cores, "procs": procs,
-            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(e0, e1, t1 - t0)}
+            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(rapl0, rapl1, mono1 - mono0)}
 
 
 def progress():
