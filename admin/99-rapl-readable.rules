@@ -1,0 +1,3 @@
+# Let every user read the CPU package energy counter, so the dashboard's CPU power tile works (and keeps working after a reboot).
+# Install on the ASTRUM machine: see admin/README.md
+ACTION=="add", SUBSYSTEM=="powercap", KERNEL=="intel-rapl:0", RUN+="/bin/chmod a+r /sys%p/energy_uj"

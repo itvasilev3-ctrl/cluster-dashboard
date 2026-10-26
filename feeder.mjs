@@ -78,7 +78,16 @@ async function statusService(jobs) {
     if (CFG.client_id) {
       try { own = astra({ action: "cluster_job", job_id: "", client_filter: CFG.client_id, limit: 200 }).jobs || jobs; } catch (e2) { log("scheduler (own jobs):", e2.message); }
     }
-    const mine = own.filter((j) => j.project === SS.project && ["queued", "running"].includes(j.status));
+    // After a reboot of the GPU machine the scheduler can keep a service job as "running" although its process is gone. A running job
+    // beats its heartbeat about every second, so one silent for 3 minutes is dead: do not wait for it, start a new service.
+    const now = Date.now() / 1000;
+    const isAlive = (j) => j.status === "queued" || (j.status === "running" && now - (j.heartbeat_ts || 0) < 180);
+    const stale = own.filter((j) => j.project === SS.project && j.status === "running" && !isAlive(j));
+    for (const j of stale) {
+      log(`status job ${j.job_id} is "running" but has not beat for ${Math.round((now - (j.heartbeat_ts || 0)) / 60)} min (GPU machine rebooted?); replacing it`);
+      try { astra({ action: "cluster_cancel", job_id: j.job_id }); } catch (e3) { log("cancel of", j.job_id, "failed:", e3.message); }
+    }
+    const mine = own.filter((j) => j.project === SS.project && isAlive(j));
     if (!mine.length) {
       const pre = `import os\nos.environ.setdefault("HOST", ${JSON.stringify(SS.host)})\nos.environ.setdefault("PORT", "${SS.port}")\n` +
         `os.environ.setdefault("HOURS", "${SS.hours || 24}")\nos.environ.setdefault("PROGRESS_DIRS", ${JSON.stringify((SS.progress_dirs || []).join(":"))})\n`;

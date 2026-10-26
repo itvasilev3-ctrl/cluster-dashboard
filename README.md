@@ -96,3 +96,14 @@ Emma v3 jobs use `tools/cluster-v3/progress.py` in the emma-avatar-v3 repo.
   (0x80070520), which left the data hours old while the laptop travelled.
 - The scheduled task (`install-task.ps1`, re-run to update) is now a watchdog that restarts the server. It runs on
   battery, catches up after sleep, and never runs twice at once.
+
+
+## After a reboot
+
+| What reboots | What happens | By itself? |
+|---|---|---|
+| **This PC** | The watchdog task now also fires at log-on and starts `server.js`; the page shows the last saved data at once and every tile is fresh about 10 s later (measured with a cold start). | yes, after you sign in |
+| **The GPU machine (ASTRUM)** | The scheduler (`astra-cluster-manager`, a lingering user service) and Tailscale start at boot. The status service job is gone, so the feeder submits a new one on its next run (within 5 min; it did so 7 min after the 03:04 reboot on 2026-10-25). A job still marked "running" without a heartbeat for 3 minutes counts as dead and is replaced. Until then the host tiles show their age in red. | yes |
+| **The GPU machine: CPU power tile** | The permission on the energy counter is reset, so the tile says "unavailable". | only with the one-time rule in `admin/README.md` |
+
+The CPU temperature, GPU, memory and slot tiles need nothing special: their sources (hwmon, the driver, `/proc`, the scheduler) are there after boot.

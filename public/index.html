@@ -212,7 +212,7 @@ function render({ now, snap, history, feed }) {
     const ct = h.cpu_temp;                                   // from the status service; absent while an older service is running
     if (ct) t.push(tile("CPU temperature", `${ct.temp_c.toFixed(0)} °C`, ct.sensors.filter((s) => s !== ct && s.label !== ct.label).map((s) => `${s.label} ${s.temp_c.toFixed(0)}°`).join(" · ") || ct.label, ct.temp_c));
     const cp = h.cpu_power;                                   // watts from the CPU package energy counter; null with a reason while it is root-only
-    if (cp) t.push(cp.watts != null ? tile("CPU power", `${cp.watts.toFixed(0)} W`, "whole CPU package, average over the last ~1.5 s") : tile("CPU power", "unavailable", cp.reason));
+    if (cp) t.push(cp.watts != null ? tile("CPU power", `${cp.watts.toFixed(0)} W`, "whole CPU package, average over the last ~1.5 s") : tile("CPU power", "unavailable", `${esc(cp.reason)}. A chmod is lost at reboot: install admin/99-rapl-readable.rules on the machine (admin/README.md).`));
     // memory of the whole host split three ways: the system (OS, services, kernel, caches), the jobs, and what is free
     const m = memBreakdown(h, ownerOf), seg = (mb, color) => `<i style="width:${100 * mb / m.total}%;background:${color}"></i>`;
     const dot = (color) => `<i class="dot" style="background:${color}"></i>`;

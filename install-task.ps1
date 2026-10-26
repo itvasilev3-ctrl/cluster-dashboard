@@ -14,5 +14,13 @@ $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -Repetiti
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
   -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-if ($?) { Write-Host "Scheduled: '$name' every 5 minutes (on battery too) -> $vbs" }
+# also at every log-on, so after a reboot the dashboard server and the feeder start as soon as you sign in (not at the next 5-minute tick)
+$logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+try {
+  Register-ScheduledTask -TaskName $name -Action $action -Trigger @($logon, $trigger) -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+  Write-Host "Scheduled: '$name' at log-on and every 5 minutes (on battery too) -> $vbs"
+} catch {
+  Write-Host "Log-on trigger refused ($($_.Exception.Message)); registering the 5-minute trigger only"
+  Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+  if ($?) { Write-Host "Scheduled: '$name' every 5 minutes (on battery too) -> $vbs" }
+}
