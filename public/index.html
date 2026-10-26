@@ -84,6 +84,7 @@
   <section class="two">
     <div class="panel click" data-detail="cores" role="button" tabindex="0" title="Click to see what runs on each core">
       <h2>CPU cores <span id="coreNote" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="coreSlots" class="muted" style="margin:0 0 8px;font-size:12px"></div>
       <div class="cores" id="cores"></div>
       <svg class="spark" id="spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
       <div class="legend"><span><i class="dot" style="background:var(--accent)"></i>CPU avg %</span><span><i class="dot" style="background:var(--ok)"></i>GPU %</span></div>
@@ -181,11 +182,14 @@ function render({ now, snap, history, feed }) {
 
   // tiles
   const t = [];
+  const workNow = h ? h.cores.reduce((s, c) => s + c.busy, 0) / 100 : null;   // cores of work really happening, from the per-core load
   if (cl) {
-    t.push(tile("CPU slots", `${cl.used_cpu_slots}/${cl.cpu_slots}`, `${cl.available_cpu_slots} free · ${cl.cpu_reserve} reserved of ${cl.logical_cpus}`, 100 * cl.used_cpu_slots / cl.cpu_slots, "cpu"));
+    // a slot is a reservation, not CPU use: say how much of it is really busy
+    t.push(tile("CPU slots reserved", `${cl.used_cpu_slots}/${cl.cpu_slots}`, workNow != null ? `<b>${workNow.toFixed(1)} cores actually busy</b> · ${cl.available_cpu_slots} slots free` : `${cl.available_cpu_slots} free`,
+      100 * cl.used_cpu_slots / cl.cpu_slots, "cpu"));
     const holders = gpuHolders.length ? [...new Set(gpuHolders.map((j) => `${j.client_id} · ${j.project}`))] : heldBy;
     t.push(tile("GPU slots", `${cl.used_gpu_slots}/${cl.gpu_slots}`,
-      (cl.used_gpu_slots ? `held by ${esc(holders.join(", ") || "a job")}` : "free") + (gpuWaiting.length ? ` · ${gpuWaiting.length} waiting` : ""),
+      (cl.used_gpu_slots ? `held by ${esc(holders.join(", ") || "a job")}` : "free") + (h && h.gpu && h.gpu.ok && h.gpu.devices[0] ? ` · <b>GPU ${h.gpu.devices[0].util}% busy</b>` : "") + (gpuWaiting.length ? ` · ${gpuWaiting.length} waiting` : ""),
       100 * cl.used_gpu_slots / Math.max(1, cl.gpu_slots), "gpu"));
     t.push(tile("Reserved memory", `${(cl.used_memory_mb/1024).toFixed(1)} GB`, `of ${(cl.memory_slots_mb/1024).toFixed(1)} GB schedulable`, 100 * cl.used_memory_mb / cl.memory_slots_mb, "memres"));
     const unlisted = cl.running_jobs - running.length;        // the scheduler counts more running jobs than it lists (it lists only the latest 200)
@@ -217,6 +221,8 @@ function render({ now, snap, history, feed }) {
       return `<div class="core ${c.busy >= 50 ? "hot" : ""}" style="background:${heat(c.busy)}" title="core ${c.id}: user ${c.user}% · nice ${c.nice}% · sys ${c.sys}% · iowait ${c.iowait}%${on ? "\n" + esc(on) : ""}">${c.id}<b>${Math.round(c.busy)}%</b></div>`; }).join("");
     const busy = h.cores.filter((c) => c.busy >= 50).length, work = h.cores.reduce((s, c) => s + c.busy, 0) / 100;
     $("coreNote").textContent = `· ${busy} of ${n} cores above 50% · load = ${work.toFixed(1)} cores of work (${(100 * work / n).toFixed(0)}%)`;
+    $("coreSlots").innerHTML = cl ? `Jobs have <b>reserved ${cl.used_cpu_slots} of ${cl.cpu_slots} CPU slots</b>, but only <b>${work.toFixed(1)} cores</b> are busy: a slot is a reservation, not CPU use. ` +
+      `Click the CPU slots tile for each job's reservation against its real use.` : "";
   }
 
   // sparkline
