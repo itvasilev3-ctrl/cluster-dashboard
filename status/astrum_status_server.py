@@ -84,6 +84,38 @@ def gpu_info(model, drv):
     return {"ok": True, "devices": devices, "apps": apps, "model": model or devices[0]["name"], "error": None}
 
 
+RAPL = "/sys/class/powercap/intel-rapl:0"                    # CPU package energy counter (AMD Zen uses the same name)
+
+
+def rapl_read():
+    """(energy in uJ, counter range in uJ, None) of the CPU package, or (None, None, reason) when it cannot be read."""
+    try:
+        uj = int(open(RAPL + "/energy_uj").read())
+    except FileNotFoundError:
+        return None, None, "no CPU package energy counter on this machine"
+    except PermissionError:
+        return None, None, "the CPU package energy counter (RAPL) is readable only by root on this machine"
+    except (OSError, ValueError) as e:
+        return None, None, f"RAPL: {e}"
+    try:
+        rng = int(open(RAPL + "/max_energy_range_uj").read())
+    except (OSError, ValueError):
+        rng = None
+    return uj, rng, None
+
+
+def cpu_power(r0, r1, seconds):
+    """Average CPU package power in watts between two rapl_read() results."""
+    if r0[2] or r1[2]:
+        return {"watts": None, "reason": r0[2] or r1[2]}
+    d = r1[0] - r0[0]
+    if d < 0:
+        if not r0[1]:
+            return {"watts": None, "reason": "the energy counter wrapped during the sample"}
+        d += r0[1]
+    return {"watts": round(d / 1e6 / seconds, 1), "source": "RAPL package-0 energy counter"}
+
+
 def cpu_temps():
     """CPU temperature from the kernel's hwmon sensors: AMD k10temp (Tctl = package, Tccd* = one per chiplet) or Intel coretemp."""
     for h in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
@@ -119,7 +151,9 @@ def thread_times():
 
 
 def probe():
+    e0, t0 = rapl_read(), time.monotonic()
     a = read_stat(); ta = thread_times(); time.sleep(1.0); b = read_stat(); tb = thread_times()
+    e1, t1 = rapl_read(), time.monotonic()
     threads, pcpu = [], {}                                                  # current use over this 1 s, not the lifetime average
     for k, (t1, core) in tb.items():
         if k in ta:
@@ -157,7 +191,7 @@ def probe():
     gpu = gpu_info(model, drv)
     return {"ts": time.time(), "hostname": os.uname().nodename, "load": [float(x) for x in open("/proc/loadavg").read().split()[:3]],
             "mem_total_mb": mem.get("MemTotal", 0), "mem_available_mb": mem.get("MemAvailable", 0), "cores": cores, "procs": procs,
-            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps()}
+            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(e0, e1, t1 - t0)}
 
 
 def progress():
