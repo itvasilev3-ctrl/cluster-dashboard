@@ -97,6 +97,11 @@
     </div>
   </section>
 
+  <section class="panel">
+    <h2>Disk space <span id="diskNote" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="scroll"><table id="disks"></table></div>
+  </section>
+
   <section class="two">
     <div class="panel">
       <h2>Cluster jobs (by user)</h2>
@@ -281,8 +286,22 @@ function render({ now, snap, history, feed }) {
   else $("gpu").innerHTML = g.devices.map(gpuDeviceHtml).join("") +
     (g.apps.length ? `<table style="margin-top:10px"><tr><th>pid</th><th>process</th><th>job</th><th class="n">VRAM MB</th><th class="n">SM %</th><th class="n">mem %</th></tr>${g.apps.map((a) => { const o = ownerOf(byPid.get(a.pid) || { pid: a.pid, ppid: 0 }); const sys = !o && a.type === "G"; const v = (x) => x == null ? "–" : x; return `<tr><td>${a.pid}</td><td class="cmd">${esc(a.name)}</td><td>${o ? esc(o.client_id + " · " + o.project) : sys ? "<span class='muted'>display (system)</span>" : "<b style='color:var(--bad)'>none</b>"}</td><td class="n">${v(a.mem_mb)}</td><td class="n">${v(a.sm)}</td><td class="n">${v(a.mem_pct)}</td></tr>`; }).join("")}</table>` : `<div class="muted" style="margin-top:8px">no processes have the GPU open</div>`) + slotBlock;
 
+  // disk space: size = used + free for jobs + kept back for root (ext4 reserves a few percent that ordinary users and jobs cannot write to)
+  const size = (mb) => (mb >= 1048576 ? `${(mb / 1048576).toFixed(2)} TB` : `${(mb / 1024).toFixed(1)} GB`);
+  const disks = ((h && h.disks) || []).filter((d) => d.total_mb >= 2048);                    // the 1 GB boot partition is not what fills up
+  const lowest = disks.map((d) => ({ d, left: d.free_mb, pct: 100 * d.used_mb / Math.max(1, d.used_mb + d.free_mb) })).sort((a, b) => b.pct - a.pct)[0];
+  $("diskNote").innerHTML = !lowest ? "" : `· <span style="${lowest.pct >= 90 ? "color:var(--bad);font-weight:600" : ""}">${esc(lowest.d.mount)} is ${lowest.pct.toFixed(0)}% full, ${size(lowest.left)} left for jobs</span>`;
+  $("disks").innerHTML = `<tr><th>mount</th><th>disk</th><th>type</th><th class="n">size</th><th class="n">used</th><th class="n">free for jobs</th><th class="n">kept for root</th><th class="n">inodes free</th><th style="min-width:180px">used (of what jobs can use)</th></tr>` +
+    (!(h && h.disks) ? `<tr><td colspan="9" class="muted">no disk data yet: the status service has not been updated</td></tr>` : disks.map((d) => {
+      const pct = 100 * d.used_mb / Math.max(1, d.used_mb + d.free_mb), bad = pct >= 90, warn = pct >= 80;
+      const colour = bad ? "var(--bad)" : warn ? "var(--warn)" : "var(--accent)";
+      return `<tr><td class="user">${esc(d.mount)}</td><td>${esc(d.model || d.device)}<div class="muted" style="font-size:11px">${esc(d.device)}</div></td><td class="muted">${esc(d.fstype)}</td>` +
+        `<td class="n">${size(d.total_mb)}</td><td class="n">${size(d.used_mb)}</td><td class="n"><b style="${bad ? "color:var(--bad)" : ""}">${size(d.free_mb)}</b></td><td class="n muted">${size(d.reserved_mb)}</td>` +
+        `<td class="n">${d.inodes_total ? (100 * d.inodes_free / d.inodes_total).toFixed(0) + "%" : "–"}</td>` +
+        `<td><b style="${bad ? "color:var(--bad)" : ""}">${pct.toFixed(0)}%</b>${bad ? ' <span class="muted">almost full</span>' : ""}<div class="bar"><i style="width:${pct}%;background:${colour}"></i></div></td></tr>`; }).join("") || `<tr><td colspan="9" class="muted">no disks reported</td></tr>`);
+
   // jobs
-  const shown = [...running, ...queued, ...jobs.filter((j) => !running.includes(j) && !queued.includes(j)).slice(0, 8)];
+  const shown =[...running, ...queued, ...jobs.filter((j) => !running.includes(j) && !queued.includes(j)).slice(0, 8)];
   $("jobs").innerHTML = `<tr><th>user</th><th>status</th><th>project</th><th>engine</th><th class="n">CPU</th><th class="n">GPU</th><th class="n">elapsed</th></tr>` +
     (shown.map((j) => {
       const el = j.status === "running" ? now - j.started_ts : j.finished_ts && j.started_ts ? j.finished_ts - j.started_ts : 0;

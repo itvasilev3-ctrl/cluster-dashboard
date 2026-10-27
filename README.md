@@ -13,6 +13,7 @@ A live page about the ASTRUM GPU machine: every job on the cluster (all users), 
 | **Tasks in progress** | Every running or queued job of every user, plus project milestones and Claude workflows. Each row has **% done**, **uses (CPU / GPU)**, detail and ETA |
 | CPU cores | Load per core, with a short history |
 | GPU | Model, and the processes holding the GPU with the job that owns each. Utilisation and VRAM are unavailable while NVML is broken on the machine (see below) |
+| Disk space | Each real disk of the GPU machine: size, used, free for jobs, space ext4 keeps for root, inodes, and a red bar when it is 90% full or more |
 | Cluster jobs, usage per user, processes | Scheduler jobs, per-user totals, the busiest processes with their owning job |
 
 How "% done" is computed:

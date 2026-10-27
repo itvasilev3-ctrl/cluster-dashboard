@@ -152,7 +152,36 @@ def gpu_info(model, drv):
             "model": model or devices[0]["name"], "error": None}
 
 
-RAPL = "/sys/class/powercap/intel-rapl:0"                    # CPU package energy counter (AMD Zen uses the same name)
+DISK_FS = {"ext4", "ext3", "xfs", "btrfs", "zfs", "ntfs", "ntfs3", "fuseblk", "exfat", "vfat", "nfs", "nfs4", "cifs"}
+
+
+def disks():
+    """Real filesystems (no tmpfs, snaps or pseudo mounts) with size, used and free. `free` is what ordinary users and jobs can still write: ext4
+    keeps a few percent back for root, which is counted in `reserved`, so size = used + free + reserved."""
+    out, seen = [], set()
+    for line in open("/proc/mounts"):
+        dev, mp, fstype = line.split()[:3]
+        if fstype not in DISK_FS or dev in seen:
+            continue
+        seen.add(dev)
+        try:
+            s = os.statvfs(mp)
+        except OSError:
+            continue
+        mb = lambda blocks: round(blocks * s.f_frsize / 1048576)
+        base = os.path.basename(dev).rstrip("0123456789")
+        base = base[:-1] if base.endswith("p") and base[:-1].startswith("nvme") else base       # nvme0n1p2 -> nvme0n1
+        model = ""
+        try:
+            model = open(f"/sys/block/{base}/device/model").read().strip()
+        except OSError:
+            pass
+        out.append({"mount": mp, "device": dev, "model": model, "fstype": fstype, "total_mb": mb(s.f_blocks), "used_mb": mb(s.f_blocks - s.f_bfree),
+                    "free_mb": mb(s.f_bavail), "reserved_mb": mb(s.f_bfree - s.f_bavail), "inodes_total": s.f_files, "inodes_free": s.f_ffree})
+    return sorted(out, key=lambda d: d["mount"])
+
+
+RAPL = "/sys/class/powercap/intel-rapl:0"                   # CPU package energy counter (AMD Zen uses the same name)
 
 
 def rapl_read():
@@ -259,7 +288,7 @@ def probe():
     gpu = gpu_info(model, drv)
     return {"ts": time.time(), "hostname": os.uname().nodename, "load": [float(x) for x in open("/proc/loadavg").read().split()[:3]],
             "mem_total_mb": mem.get("MemTotal", 0), "mem_available_mb": mem.get("MemAvailable", 0), "cores": cores, "procs": procs,
-            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(rapl0, rapl1, mono1 - mono0)}
+            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(rapl0, rapl1, mono1 - mono0), "disks": disks()}
 
 
 def progress():
