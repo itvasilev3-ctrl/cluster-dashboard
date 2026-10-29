@@ -201,16 +201,30 @@ def rapl_read():
     return uj, rng, None
 
 
+def rapl_rule_installed():
+    """True when a boot-time rule that opens the counter is installed (the udev rule from admin/); a plain chmod is lost at every reboot."""
+    return any(glob.glob(f"{d}/*rapl*") for d in ("/etc/udev/rules.d", "/usr/lib/udev/rules.d", "/etc/tmpfiles.d", "/etc/systemd/system"))
+
+
+def boot_time():
+    """When the machine last started (unix time), from /proc/stat."""
+    for line in open("/proc/stat"):
+        if line.startswith("btime"):
+            return int(line.split()[1])
+    return None
+
+
 def cpu_power(r0, r1, seconds):
-    """Average CPU package power in watts between two rapl_read() results."""
+    """Average CPU package power in watts between two rapl_read() results; `persistent` says whether the permission survives a reboot."""
+    persistent = rapl_rule_installed()
     if r0[2] or r1[2]:
-        return {"watts": None, "reason": r0[2] or r1[2]}
+        return {"watts": None, "reason": r0[2] or r1[2], "persistent": persistent}
     d = r1[0] - r0[0]
     if d < 0:
         if not r0[1]:
-            return {"watts": None, "reason": "the energy counter wrapped during the sample"}
+            return {"watts": None, "reason": "the energy counter wrapped during the sample", "persistent": persistent}
         d += r0[1]
-    return {"watts": round(d / 1e6 / seconds, 1), "source": "RAPL package-0 energy counter"}
+    return {"watts": round(d / 1e6 / seconds, 1), "source": "RAPL package-0 energy counter", "persistent": persistent}
 
 
 def cpu_temps():
@@ -288,7 +302,7 @@ def probe():
     gpu = gpu_info(model, drv)
     return {"ts": time.time(), "hostname": os.uname().nodename, "load": [float(x) for x in open("/proc/loadavg").read().split()[:3]],
             "mem_total_mb": mem.get("MemTotal", 0), "mem_available_mb": mem.get("MemAvailable", 0), "cores": cores, "procs": procs,
-            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(rapl0, rapl1, mono1 - mono0), "disks": disks()}
+            "threads": threads, "gpu": gpu, "cpu_temp": cpu_temps(), "cpu_power": cpu_power(rapl0, rapl1, mono1 - mono0), "disks": disks(), "boot_ts": boot_time()}
 
 
 def progress():

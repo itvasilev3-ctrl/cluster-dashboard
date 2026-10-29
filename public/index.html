@@ -61,6 +61,7 @@
   .modal-head h2 { margin:0; font-size:15px; text-transform:none; letter-spacing:0; color:var(--text); }
   .modal h3 { margin:18px 0 6px; font-size:12px; font-weight:650; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
   .modal p { margin:6px 0; }
+  .modal pre { background:var(--c0); padding:10px 12px; border-radius:8px; white-space:pre-wrap; word-break:break-all; font-size:12px; margin:6px 0; user-select:all; }
   .modal tr.total td { font-weight:650; border-top:2px solid var(--line); }
   .modal .warn { color:var(--bad); font-weight:600; }
   button.pill { background:none; color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
@@ -217,7 +218,9 @@ function render({ now, snap, history, feed }) {
     const ct = h.cpu_temp;                                   // from the status service; absent while an older service is running
     if (ct) t.push(tile("CPU temperature", `${ct.temp_c.toFixed(0)} °C`, ct.sensors.filter((s) => s !== ct && s.label !== ct.label).map((s) => `${s.label} ${s.temp_c.toFixed(0)}°`).join(" · ") || ct.label, ct.temp_c));
     const cp = h.cpu_power;                                   // watts from the CPU package energy counter; null with a reason while it is root-only
-    if (cp) t.push(cp.watts != null ? tile("CPU power", `${cp.watts.toFixed(0)} W`, "whole CPU package, average over the last ~1.5 s") : tile("CPU power", "unavailable", `${esc(cp.reason)}. A chmod is lost at reboot: install admin/99-rapl-readable.rules on the machine (admin/README.md).`));
+    if (cp) t.push(cp.watts != null
+      ? tile("CPU power", `${cp.watts.toFixed(0)} W`, "whole CPU package, ~1.5 s average" + (cp.persistent === false ? ` · <b style="color:var(--bad)">will be lost at the next reboot</b>, click to fix` : ""), null, "power")
+      : tile("CPU power", "unavailable", "the CPU's energy counter is root-only · <b>click for the one-time fix</b>", null, "power"));
     // memory of the whole host split three ways: the system (OS, services, kernel, caches), the jobs, and what is free
     const m = memBreakdown(h, ownerOf), seg = (mb, color) => `<i style="width:${100 * mb / m.total}%;background:${color}"></i>`;
     const dot = (color) => `<i class="dot" style="background:${color}"></i>`;
@@ -334,7 +337,7 @@ function render({ now, snap, history, feed }) {
 
 // ---------------------------------------------------------------- "what uses it": click a tile to see every user of that resource
 let ctx = null, openKind = null, lastModal = "", onCore = {};
-const DETAIL_TITLES = { cores: "CPU cores: what runs on each core", cpu: "CPU: everything using it", gpu: "GPU: everything using it", memory: "Memory: system, jobs and free" };
+const DETAIL_TITLES = { power: "CPU power: how to keep it after a reboot", cores: "CPU cores: what runs on each core", cpu: "CPU: everything using it", gpu: "GPU: everything using it", memory: "Memory: system, jobs and free" };
 const gb = (mb) => (mb / 1024).toFixed(1);
 const who = (j) => `${esc(j.client_id)} · ${esc(j.project)}`;
 const short = (s, n = 100) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -356,6 +359,26 @@ function usageOf(c) {
 
 function detailHtml(kind) {
   const { now, jobs, running, queued, h, cl, g, ownerOf, byPid } = ctx;
+
+  if (kind === "power") {
+    const cp = h && h.cpu_power;
+    if (!cp) return `<p class="muted">no host data yet</p>`;
+    const CMD = `echo 'ACTION=="add", SUBSYSTEM=="powercap", KERNEL=="intel-rapl:0", RUN+="/bin/chmod a+r /sys%p/energy_uj"' | sudo tee /etc/udev/rules.d/99-rapl-readable.rules && ` +
+      `sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=powercap --action=add && cat /sys/class/powercap/intel-rapl:0/energy_uj`;
+    const boot = h.boot_ts ? `The machine last started ${fmtAge(now - h.boot_ts)} ago (${esc(new Date(h.boot_ts * 1000).toLocaleString())}). ` : "";
+    const state = cp.watts != null
+      ? `<p><b>${cp.watts.toFixed(0)} W</b> right now, from the CPU package energy counter. ${boot}</p>` +
+        (cp.persistent === false ? `<p class="warn">The counter is readable only because someone ran a one-off chmod. A reboot undoes that and this tile goes back to "unavailable". Install the boot-time rule below to keep it.</p>`
+          : `<p>A boot-time rule is installed, so the counter stays readable after every reboot.</p>`)
+      : `<p class="warn">Unavailable: ${esc(cp.reason)}.</p><p>${boot}A chmod done by hand does not survive a reboot, which is why this came back.</p>`;
+    const fix = cp.persistent === true ? "" : `<h3>One-time fix, on the ASTRUM machine (needs sudo)</h3>` +
+      `<p>Open a terminal on the machine as a user with sudo and paste this single line. It installs a rule that opens the counter every time the machine boots:</p>` +
+      `<pre id="rplCmd">${esc(CMD)}</pre><p><button type="button" class="pill" data-copy="rplCmd">Copy command</button></p>` +
+      `<p class="muted">It prints a number when it worked. The tile fills in at the next refresh (within 5 minutes) with no change to the dashboard, and this window then says the rule is installed. ` +
+      `The same steps are in admin/README.md.</p>`;
+    return state + fix + `<h3>What it changes</h3><p class="muted">Every user on that machine can then read the CPU's power draw. Linux restricts the counter because power readings can leak information about what other users run on the CPU (a side channel called PLATYPUS); on a machine whose users are trusted that is usually acceptable. To undo it, delete /etc/udev/rules.d/99-rapl-readable.rules and run <code>sudo chmod o-r /sys/class/powercap/intel-rapl:0/energy_uj</code>.</p>`;
+  }
+
   if (!cl) return `<p class="muted">no scheduler data yet</p>`;
   const u = usageOf(ctx);
   const use = (j) => u.per.get(j.job_id) || { cores: 0, rss: 0, n: 0, procs: [] };
@@ -461,6 +484,14 @@ document.addEventListener("click", (e) => { const t = e.target.closest("[data-de
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeDetail();
   else if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches("[data-detail]")) { e.preventDefault(); openDetail(e.target.dataset.detail); }
+});
+document.addEventListener("click", (e) => {                       // "Copy command" buttons
+  const b = e.target.closest("[data-copy]");
+  if (!b) return;
+  const el = $(b.dataset.copy), txt = el.textContent;
+  (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(
+    () => { b.textContent = "Copied ✓"; },
+    () => { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = "Selected: press Ctrl+C"; });
 });
 $("modalClose").addEventListener("click", closeDetail);
 $("modalBg").addEventListener("click", (e) => { if (e.target === $("modalBg")) closeDetail(); });
