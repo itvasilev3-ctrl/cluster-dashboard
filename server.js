@@ -36,6 +36,7 @@ pushHistory();
 
 // ------------------------------------------------------------------ feeder loop
 const FEED_MS = Number(process.env.FEED_MIN || 5) * 60_000, FEED_TIMEOUT_MS = 4.5 * 60_000;
+let retries = 0;
 const feed = { running: false, last_start: null, last_end: null, last_code: null, last_reason: null, runs: 0, next_due: null };
 function runFeed(reason) {
   if (feed.running) return false;
@@ -43,7 +44,12 @@ function runFeed(reason) {
   const p = spawn(process.execPath, [path.join(__dirname, "feeder.mjs")], { cwd: __dirname, windowsHide: true, stdio: "ignore",
     env: { ...process.env, FEED_FROM_SERVER: "1" } });
   const kill = setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, FEED_TIMEOUT_MS);
-  const done = (code) => { clearTimeout(kill); feed.running = false; feed.last_end = Date.now() / 1000; feed.last_code = code; };
+  const done = (code) => {
+    clearTimeout(kill); feed.running = false; feed.last_end = Date.now() / 1000; feed.last_code = code;
+    // code 2 = the feeder could not read everything (the network is not up yet after a boot, the GPU machine is restarting): try again soon
+    // instead of waiting for the next 5-minute run, at most 8 times in a row
+    if (code === 2 && retries < 8) { retries++; setTimeout(() => runFeed("retry"), 45_000); } else if (code === 0) retries = 0;
+  };
   p.on("exit", done); p.on("error", () => done(-1));
   return true;
 }

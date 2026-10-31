@@ -165,7 +165,8 @@ function renderFeed(now, feed) {
 
 function render({ now, snap, history, feed }) {
   renderFeed(now, feed);
-  const h = snap.host, cl = snap.cluster, jobs = snap.jobs || [];
+  const h = snap.host, jobs = Array.isArray(snap.jobs) ? snap.jobs : [];
+  const cl = snap.cluster && typeof snap.cluster.cpu_slots === "number" ? snap.cluster : null;   // an error message stored as "cluster" must not draw tiles
   const running = jobs.filter((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "queued" || j.status === "pending");
   // the GPU slot: a job can hold it while the GPU sits idle (e.g. during a CPU phase), so this is separate from "processes using the GPU"

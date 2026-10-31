@@ -41,6 +41,8 @@ function astra(req, timeoutMs = 60_000) {
   if (r.error) throw r.error;
   const out = (r.stdout || "").trim();
   const o = JSON.parse(out.slice(out.indexOf("{")));
+  // an unreachable machine answers {"error": "...", "exit_code": 255} instead of a result: that is a failure, not data
+  if (o.error && typeof o.result !== "string") throw new Error(String(o.error).split("\n")[0].slice(0, 200));
   return typeof o.result === "string" ? JSON.parse(o.result) : o;
 }
 
@@ -286,20 +288,25 @@ async function cycle() {
   let cluster = null, jobs = [];
   try {
     cluster = astra({ action: "cluster_capacity" });
-    jobs = astra({ action: "cluster_job", job_id: "", client_filter: "", limit: 200 }).jobs || [];   // 200 = the maximum; long jobs fall out of shorter windows
-  } catch (e) { log("scheduler:", e.message); }
-  const st = await statusService(jobs);
-  jobs = withUnlistedRunning(jobs, st.host);
+    jobs = astra({ action: "cluster_job", job_id: "", client_filter: "", limit: 200 }).jobs;   // 200 = the maximum; long jobs fall out of shorter windows
+    if (typeof cluster.cpu_slots !== "number" || !Array.isArray(jobs)) throw new Error("the scheduler answered with something that is not capacity and jobs");
+  } catch (e) { log("scheduler:", e.message); cluster = null; jobs = []; }   // never feed an error message to the page as if it were data
+  let st;
+  try { st = await statusService(jobs); } catch (e) { log("status service:", e.message); st = { host: null, progress: [], note: `status service check failed: ${e.message}` }; }
+  if (cluster) jobs = withUnlistedRunning(jobs, st.host);
   if (st.host && CFG.installed_ram_gb) st.host.mem_installed_mb = Math.round(CFG.installed_ram_gb * 1024);   // the OS reports ~2 GB less than installed
-  const tasks = buildTasks(jobs, st.progress || [], st.host, now);
-  const body = { tasks };
-  if (cluster) { body.cluster = cluster; body.jobs = jobs; }
+  // Only feed what was really read: with the scheduler unreachable (right after this PC boots, before the network is up) the old cluster, jobs and
+  // task rows stay on the page with their age showing, instead of being replaced by "no jobs, nothing running".
+  const body = {};
+  if (cluster) { body.cluster = cluster; body.jobs = jobs; body.tasks = buildTasks(jobs, st.progress || [], st.host, now); }
   if (st.host) body.host = st.host;
+  if (!body.cluster && !body.host) { log("nothing reachable (scheduler and status service); keeping the data on the page"); process.exitCode = 2; return; }
   const r = await fetch(`${DASH}/api/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     signal: AbortSignal.timeout(5000) });
   fs.writeFileSync(path.join(STATE, "last-feed.json"), JSON.stringify({ at: new Date().toISOString(), ingest: r.status, note: st.note || null,
-    host: !!st.host, jobs: jobs.length, tasks }, null, 1));
-  log(`fed: ingest ${r.status}, ${jobs.length} jobs, ${tasks.length} tasks, host ${st.host ? "ok" : st.note || "missing"}`);
+    host: !!st.host, jobs: jobs.length, tasks: body.tasks || [] }, null, 1));
+  log(`fed: ingest ${r.status}, ${cluster ? jobs.length + " jobs, " + body.tasks.length + " tasks" : "scheduler unreachable, no jobs or tasks"}, host ${st.host ? "ok" : st.note || "missing"}`);
+  if (!cluster || !st.host) process.exitCode = 2;           // incomplete: the server retries soon instead of waiting 5 minutes
 }
 
 const loop = process.argv.includes("--loop");
